@@ -114,6 +114,8 @@ if(TRLEN > 1000)
     % Compute and bin saccade direction into 8 directions
     % Direction is measured w.r.t horizontal axis
     % Directions are [0 1 2 3 4 5 6 7]*pi/4
+    
+    if(~ismember('sacend', fieldnames(EyeData(tr)))), continue; end
     for p=1:length(EyeData(tr).sacend)
     if(EyeData(tr).sacstart(p) > 0 && EyeData(tr).sacend(p) > 0)
       xdisp = EyeData(tr).pixeyeh(EyeData(tr).sacend(p)) - EyeData(tr).pixeyeh(EyeData(tr).sacstart(p));
