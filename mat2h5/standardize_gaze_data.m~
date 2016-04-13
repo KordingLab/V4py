@@ -87,7 +87,7 @@ for f=1:numel(file)
             in_sac_dur = 1e-3*(EyeData(tr).sacend(s)-EyeData(tr).sacstart(s));
             
             % Outgoing saccade duration
-            out_sac_dur = 1e-3*(EyeData(tr).sacend(s+1)-EyeData(tr).sacstart(s+1));
+            out_sac_dur = EyeData(tr).sacend(s+1)-EyeData(tr).sacstart(s+1);
 
             % Put everything into a struct
             count=count+1;
