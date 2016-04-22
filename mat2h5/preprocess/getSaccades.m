@@ -71,46 +71,92 @@ if(TRLEN > 1000)
     [pks, pktimes] = findpeaks(vel, 'minpeakheight', MINPEAK);
     
     % Detect blinks
-    if(max(pks) > BLINKTHRESH)
-      blinkidxs = find(pks > 1.2*std(pks));
-      % Mark peaks adjacent to blink peaks for deletion
-      adjidxs = [];
-      for bk = 1:length(blinkidxs)
-        if(blinkidxs(bk) > 1)
-          if(isempty(find(pktimes == blinkidxs(bk)-1, 1)) && pktimes(blinkidxs(bk)) - pktimes(blinkidxs(bk)-1) < 100)
-            adjidxs = [adjidxs, blinkidxs(bk)-1];
-          end
-        end
-        if(blinkidxs(bk) < length(pks))
-          if(isempty(find(pktimes == blinkidxs(bk)+1, 1)) && pktimes(blinkidxs(bk)+1) - pktimes(blinkidxs(bk)) < 100)
-            adjidxs = [adjidxs, blinkidxs(bk)+1];
-          end
-        end
-      end
-      blinkidxs = [blinkidxs, adjidxs];
-    
-      % Discard blinks
-      pks(blinkidxs) = [];
-      pktimes(blinkidxs) = [];
-    end
+%     if(max(pks) > BLINKTHRESH)
+%       blinkidxs = find(pks > 1.2*std(pks));
+%       % Mark peaks adjacent to blink peaks for deletion
+%       adjidxs = [];
+%       for bk = 1:length(blinkidxs)
+%         if(blinkidxs(bk) > 1)
+%           if(isempty(find(pktimes == blinkidxs(bk)-1, 1)) && pktimes(blinkidxs(bk)) - pktimes(blinkidxs(bk)-1) < 100)
+%             adjidxs = [adjidxs, blinkidxs(bk)-1];
+%           end
+%         end
+%         if(blinkidxs(bk) < length(pks))
+%           if(isempty(find(pktimes == blinkidxs(bk)+1, 1)) && pktimes(blinkidxs(bk)+1) - pktimes(blinkidxs(bk)) < 100)
+%             adjidxs = [adjidxs, blinkidxs(bk)+1];
+%           end
+%         end
+%       end
+%       blinkidxs = [blinkidxs, adjidxs];
+%     
+%       % Discard blinks
+%       pks(blinkidxs) = [];
+%       pktimes(blinkidxs) = [];
+%     end
     
     % Detect saccades
     for p=1:length(pktimes)
+      % Store peak velocity
+      EyeData(tr).pkvel(p) = pks(p);
+      
+      % Label blinks
+      EyeData(tr).blink(p) = (pks(p) > BLINKTHRESH);
+      
+      % Store peak velocity timestamp
       EyeData(tr).sacpeak(p) = pktimes(p);
+      
+      % Detect and store saccade start timestamp
       temp = find(vel(max(pktimes(p)-100,1):pktimes(p)) < MINPEAK);
       if(~isempty(temp))
         EyeData(tr).sacstart(p) = max(pktimes(p) - 100 + temp(end), 1);
       else
         EyeData(tr).sacstart(p) = max(EyeData(tr).sacpeak(p) - 40, 1);
       end
-        temp = find(vel(pktimes(p):min(pktimes(p)+100,TRLEN-1)) < MINPEAK);
+      
+      % Detect and store saccade end timestamp
+      temp = find(vel(pktimes(p):min(pktimes(p)+100,TRLEN-1)) < MINPEAK);
       if(~isempty(temp))
         EyeData(tr).sacend(p) = pktimes(p) + temp(1);
       else
         EyeData(tr).sacend(p) = min(EyeData(tr).sacpeak(p) + 40, TRLEN-1);
-      end
+      end 
     end
     
+    % Exclude duplicates
+    toDel = [];
+    for p=1:length(EyeData(tr).sacend)
+        tmp = find(EyeData(tr).sacstart == EyeData(tr).sacstart(p));
+        if(numel(tmp) > 1)
+            toDel = [toDel, tmp(1:end-1)];
+        end
+        tmp = find(EyeData(tr).sacend == EyeData(tr).sacend(p));
+        if(numel(tmp) > 1)
+            toDel = [toDel, tmp(1:end-1)];
+        end
+    end
+    if(numel(EyeData(tr).sacend) > 0)
+        EyeData(tr).sacstart(toDel) = [];
+        EyeData(tr).sacpeak(toDel) = [];
+        EyeData(tr).sacend(toDel) = [];
+    end
+    
+    % Merge peaks belonging to the same saccade
+    tmp = []; sacstarttoDel = []; sacendtoDel = [];
+    STOPTHRESH = 1;
+    for p=1:length(EyeData(tr).sacend)-1
+        tmp = min(vel(EyeData(tr).sacend(p):EyeData(tr).sacstart(p+1)));
+        if(tmp > STOPTHRESH)
+            sacstarttoDel = [sacstarttoDel, p+1];
+            sacendtoDel = [sacendtoDel, p];
+        end
+    end
+    if(numel(EyeData(tr).sacend) > 0)
+        EyeData(tr).sacstart(sacstarttoDel) = [];
+        EyeData(tr).sacpeak(sacstarttoDel) = [];
+        EyeData(tr).sacend(sacendtoDel) = [];
+    end
+    
+    % Store kinematics
     EyeData(tr).hvel = hvel;
     EyeData(tr).vvel = vvel;
     EyeData(tr).vel = vel;
@@ -144,6 +190,5 @@ if(TRLEN > 1000)
     
 end
 end
-save EyeData EyeData
         
         
