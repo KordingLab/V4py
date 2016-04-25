@@ -64,15 +64,17 @@ for f=1:numel(file)
             fixation = s;
             
             % Row and column of fixation
-            row = round(HEIGHT-median(EyeData(tr).pixeyev(EyeData(tr).sacend(s):EyeData(tr).sacstart(s+1))));
-            col = round(median(EyeData(tr).pixeyeh(EyeData(tr).sacend(s):EyeData(tr).sacstart(s+1))));
+            fixstart = EyeData(tr).sacend(s);
+            fixend = EyeData(tr).sacstart(s+1);
+            row = round(nanmean(EyeData(tr).pixeyev(fixstart:fixend)));
+            col = round(nanmean(EyeData(tr).pixeyeh(fixstart:fixend)));
 
             % Row and column at fixation onset
-            fix_onset_row = round(HEIGHT - EyeData(tr).pixeyev(EyeData(tr).sacend(s)));
+            fix_onset_row = round(EyeData(tr).pixeyev(EyeData(tr).sacend(s)));
             fix_onset_col = round(EyeData(tr).pixeyeh(EyeData(tr).sacend(s)));
             
             % Row and column at fixation offset
-            fix_offset_row = round(HEIGHT - EyeData(tr).pixeyev(EyeData(tr).sacstart(s+1)));
+            fix_offset_row = round(EyeData(tr).pixeyev(EyeData(tr).sacstart(s+1)));
             fix_offset_col = round(EyeData(tr).pixeyeh(EyeData(tr).sacstart(s+1)));
             
             % Fixation onset time
@@ -97,7 +99,10 @@ for f=1:numel(file)
             out_sac_pkvel = EyeData(tr).pkvel(s+1);
             
             % Outgoing saccade blink or not?
-            out_sac_blink = EyeData(tr).blink(s);
+            out_sac_blink = EyeData(tr).blink(s+1);
+            
+            % Is it a bad fixation
+            badfix = EyeData(tr).badfix(s);
             
             % Put everything into a struct
             count=count+1;
@@ -119,6 +124,7 @@ for f=1:numel(file)
             Eyes(count).fix_onset_col = fix_onset_col;
             Eyes(count).fix_offset_row = fix_offset_row;
             Eyes(count).fix_offset_col = fix_offset_col;
+            Eyes(count).badfix = badfix;
         end
     end
 
@@ -129,7 +135,7 @@ for f=1:numel(file)
         Spikes(uu).times = SpikeTimes{uu};
     end
     
-    %save(sprintf('../../matdata/M1/%s', filename), 'Eyes', 'Spikes', '-v7.3');
+    save(sprintf('../../matdata/M1/%s', filename), 'Eyes', 'Spikes', '-v7.3');
     %pause
 end
 

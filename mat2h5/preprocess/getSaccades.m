@@ -3,16 +3,19 @@ function EyeData = getSaccades(onset, offset, eyeh, eyev)
 close all
 
 % Voltage to degrees
-%pixeyeh = medfilt1(double(eyeh), 5)/575;
-%pixeyev = medfilt1(double(eyev), 5)/575;
-pixeyeh = medfilt1(double(eyeh), 5)/575;
-pixeyev = medfilt1(double(eyev), 5)/575;
+eyeh = medfilt1(double(eyeh), 5)/575;
+eyev = medfilt1(double(eyev), 5)/575;
 
 % Degrees to pixels
-hfac = 1024/41.7;
-vfac = 768/33.7;
-pixeyeh = pixeyeh*hfac + 512;
-pixeyev = pixeyev*vfac + 384;
+%hfac = 1024/41.7;
+%vfac = 768/33.7;
+%pixeyeh = pixeyeh*hfac + 512;
+%pixeyev = pixeyev*vfac + 384;
+
+screenDistance = 43;
+pixPerCM = 26.75;
+pixeyev = 768/2 - pixPerCM*screenDistance*tan(eyev*pi/180);
+pixeyeh = 1024/2 + pixPerCM*screenDistance*tan(eyeh*pi/180);
 
 % Detect saccades
 plotstep = 10;
@@ -21,8 +24,9 @@ plotstep = 10;
 b = fir1(100, 25/500);
 
 % Set some thresholds
-MINPEAK = 20; %pixels/ms
+MINPEAK = 5; %pixels/ms
 BLINKTHRESH = 1000; %pixels/ms
+STOPTHRESH = 1; % pixels/ms
 
 for tr=1:length(onset)
 TRLEN = offset(tr)-onset(tr)+1;
@@ -47,25 +51,11 @@ if(TRLEN > 1000)
     %%%imagesc(flipdim(I,1));
     %%%colormap('gray'); 
     
-    % Draw bounding box representing the stimulus
-    %%%plot(1:1024, ones(1024,1), 'k--');
-    %%%plot(1:1024, 768*ones(1024,1), 'k--');
-    %%%plot(ones(768,1), 1:768, 'k--');
-    %%%plot(1024*ones(768,1), 1:768, 'k--');
-    
     % Animate the scan path
 %     for t=onset(tr):plotstep:offset(tr)
 %       plot(pixeyeh(t), pixeyev(t), 'kx', 'Markersize', 10);
 %       pause(0.0001);
 %     end
-    % Plot the scan path
-    %%%plot(pixeyeh(onset(tr):offset(tr)), pixeyev(onset(tr):offset(tr)));
-    
-    % Plot the xy gaze coordinates within the trial
-    %%%figure(1);  hold on;
-    %%%plot(pixeyeh(onset(tr):offset(tr)));
-    %%%plot(pixeyev(onset(tr):offset(tr)), 'r');
-    %%%plot(vel, 'k');
     
     % Detect peaks
     [pks, pktimes] = findpeaks(vel, 'minpeakheight', MINPEAK);
@@ -106,7 +96,7 @@ if(TRLEN > 1000)
       EyeData(tr).sacpeak(p) = pktimes(p);
       
       % Detect and store saccade start timestamp
-      temp = find(vel(max(pktimes(p)-100,1):pktimes(p)) < MINPEAK);
+      temp = find(vel(max(pktimes(p)-100,1):pktimes(p)) < STOPTHRESH);
       if(~isempty(temp))
         EyeData(tr).sacstart(p) = max(pktimes(p) - 100 + temp(end), 1);
       else
@@ -114,7 +104,7 @@ if(TRLEN > 1000)
       end
       
       % Detect and store saccade end timestamp
-      temp = find(vel(pktimes(p):min(pktimes(p)+100,TRLEN-1)) < MINPEAK);
+      temp = find(vel(pktimes(p):min(pktimes(p)+100,TRLEN-1)) < STOPTHRESH);
       if(~isempty(temp))
         EyeData(tr).sacend(p) = pktimes(p) + temp(1);
       else
@@ -135,6 +125,8 @@ if(TRLEN > 1000)
         end
     end
     if(numel(EyeData(tr).sacend) > 0)
+        EyeData(tr).blink(toDel) = [];
+        EyeData(tr).pkvel(toDel) = [];
         EyeData(tr).sacstart(toDel) = [];
         EyeData(tr).sacpeak(toDel) = [];
         EyeData(tr).sacend(toDel) = [];
@@ -142,7 +134,6 @@ if(TRLEN > 1000)
     
     % Merge peaks belonging to the same saccade
     tmp = []; sacstarttoDel = []; sacendtoDel = [];
-    STOPTHRESH = 1;
     for p=1:length(EyeData(tr).sacend)-1
         tmp = min(vel(EyeData(tr).sacend(p):EyeData(tr).sacstart(p+1)));
         if(tmp > STOPTHRESH)
@@ -153,6 +144,8 @@ if(TRLEN > 1000)
     if(numel(EyeData(tr).sacend) > 0)
         EyeData(tr).sacstart(sacstarttoDel) = [];
         EyeData(tr).sacpeak(sacstarttoDel) = [];
+        EyeData(tr).blink(sacstarttoDel) = [];
+        EyeData(tr).pkvel(sacstarttoDel) = [];
         EyeData(tr).sacend(sacendtoDel) = [];
     end
     
@@ -162,6 +155,54 @@ if(TRLEN > 1000)
     EyeData(tr).vel = vel;
     EyeData(tr).pixeyeh = pixeyeh(onset(tr):offset(tr));
     EyeData(tr).pixeyev = pixeyev(onset(tr):offset(tr));
+    
+    % Mark bad fixations 
+    for p=1:length(EyeData(tr).sacend)-1
+        fixstart = EyeData(tr).sacend(p);
+        fixend = EyeData(tr).sacstart(p+1);
+        h = EyeData(tr).pixeyeh(fixstart:fixend);
+        v = 768-EyeData(tr).pixeyev(fixstart:fixend);
+        
+        hm=nanmean(h);
+        vm=nanmean(v);
+        if(mean(abs(hm-h)) > 20 || mean(abs(vm-v)) > 20 || isnan(hm) || isnan(vm))
+            EyeData(tr).badfix(p) = 1;
+        else
+            EyeData(tr).badfix(p) = 0;
+        end
+    end
+    EyeData(tr).badfix(p+1) = 0;
+    
+%     % Plot the xy gaze coordinates within the trial
+%     figure(200);  cla; hold on;
+%     plot(pixeyeh(onset(tr):offset(tr)));
+%     plot(pixeyev(onset(tr):offset(tr)), 'r');
+%     plot(vel, 'k');
+%     
+%     % Animate the detected fixations
+%     % Plot the scan path
+%     figure(100); cla; hold on;
+%     plot(pixeyeh(onset(tr):offset(tr)), 768-pixeyev(onset(tr):offset(tr)));
+%     for p=1:length(EyeData(tr).sacend)-1
+%         
+%         % Visualize each fixation
+%         fixstart = EyeData(tr).sacend(p);
+%         fixend = EyeData(tr).sacstart(p+1);
+%         h = EyeData(tr).pixeyeh(fixstart:fixend);
+%         v = 768-EyeData(tr).pixeyev(fixstart:fixend);
+%         hm=nanmean(h);
+%         vm=nanmean(v);
+%         mean(abs(hm-h)), mean(abs(vm-v))
+%         figure(100); hold on;
+%         plot(hm, vm, 'ro', 'MarkerFaceColor', 'r', 'MarkerSize', 5);
+%         
+%         
+%         % Visualize saccade onsets, peaks and offsets
+%         figure(200); hold on;
+%         plot(EyeData(tr).sacstart(p+1), vel(EyeData(tr).sacstart(p+1)), 'g*', 'MarkerSize', 10);
+%         plot(EyeData(tr).sacend(p), vel(EyeData(tr).sacend(p)), 'c*', 'MarkerSize', 10);
+%         pause
+%     end
     
     % Compute and bin saccade direction into 8 directions
     % Direction is measured w.r.t horizontal axis
@@ -178,10 +219,7 @@ if(TRLEN > 1000)
     end
     end
     
-    % Visualize saccade onsets, peaks and offsets
-    %%%plot(EyeData(tr).sacstart, vel(EyeData(tr).sacstart), 'm*', 'MarkerSize', 10);
-    %%%plot(EyeData(tr).sacstart, vel(EyeData(tr).sacstart), 'g*', 'MarkerSize', 10);
-    %%%plot(EyeData(tr).sacend, vel(EyeData(tr).sacend), 'c*', 'MarkerSize', 10);
+    
     
     
     %%%pause
