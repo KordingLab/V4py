@@ -27,6 +27,7 @@ b = fir1(100, 25/500);
 MINPEAK = 5; %pixels/ms
 BLINKTHRESH = 1000; %pixels/ms
 STOPTHRESH = 1; % pixels/ms
+PATHDEVIATION = 20; % pixels
 
 for tr=1:length(onset)
 TRLEN = offset(tr)-onset(tr)+1;
@@ -165,7 +166,7 @@ if(TRLEN > 1000)
         
         hm=nanmean(h);
         vm=nanmean(v);
-        if(mean(abs(hm-h)) > 20 || mean(abs(vm-v)) > 20 || isnan(hm) || isnan(vm))
+        if(mean(abs(hm-h)) > PATHDEVIATION || mean(abs(vm-v)) > PATHDEVIATION || isnan(hm) || isnan(vm))
             EyeData(tr).badfix(p) = 1;
         else
             EyeData(tr).badfix(p) = 0;

@@ -6,7 +6,7 @@ HEIGHT = 1024;
 WIDTH = 768;
 
 %% Load the data
-file = dir(sprintf('%s/data/booboo/*randlum*nev*mat', FILE_DIR));
+file = dir(sprintf('%s/data/booboo/*orig*nev*mat', FILE_DIR));
 f = 1;
 clearvars -except file f PROJECT_DIR FILE_DIR HEIGHT WIDTH
 for f=1:numel(file)
@@ -44,7 +44,7 @@ for f=1:numel(file)
         trial = tr;
         
         % Image path
-        impath = 'stimuli/M2/Randlum';
+        impath = 'stimuli/M2/Orig';
         
         % Image name
         imageID = stimID(tr);
@@ -59,9 +59,19 @@ for f=1:numel(file)
             fixation = s;
             
             % Row and column of fixation
-            row = round(HEIGHT-median(EyeData(tr).pixeyev(EyeData(tr).sacend(s):EyeData(tr).sacstart(s+1))));
-            col = round(median(EyeData(tr).pixeyeh(EyeData(tr).sacend(s):EyeData(tr).sacstart(s+1))));
+            fixstart = EyeData(tr).sacend(s);
+            fixend = EyeData(tr).sacstart(s+1);
+            row = round(nanmean(EyeData(tr).pixeyev(fixstart:fixend)));
+            col = round(nanmean(EyeData(tr).pixeyeh(fixstart:fixend)));
 
+            % Row and column at fixation onset
+            fix_onset_row = round(EyeData(tr).pixeyev(EyeData(tr).sacend(s)));
+            fix_onset_col = round(EyeData(tr).pixeyeh(EyeData(tr).sacend(s)));
+            
+            % Row and column at fixation offset
+            fix_offset_row = round(EyeData(tr).pixeyev(EyeData(tr).sacstart(s+1)));
+            fix_offset_col = round(EyeData(tr).pixeyeh(EyeData(tr).sacstart(s+1)));
+            
             % Fixation onset time
             fix_onset = 1e-3*(onset(tr) + EyeData(tr).sacend(s));
             
@@ -71,9 +81,24 @@ for f=1:numel(file)
             % Incoming saccade duration
             in_sac_dur = 1e-3*(EyeData(tr).sacend(s)-EyeData(tr).sacstart(s));
             
+            % Incoming saccade peak velocity
+            in_sac_pkvel = EyeData(tr).pkvel(s);
+            
+            % Incoming saccade blink or not?
+            in_sac_blink = EyeData(tr).blink(s);
+            
             % Outgoing saccade duration
             out_sac_dur = 1e-3*(EyeData(tr).sacend(s+1)-EyeData(tr).sacstart(s+1));
 
+            % Outgoing saccade peak velocity
+            out_sac_pkvel = EyeData(tr).pkvel(s+1);
+            
+            % Outgoing saccade blink or not?
+            out_sac_blink = EyeData(tr).blink(s+1);
+            
+            % Is it a bad fixation
+            badfix = EyeData(tr).badfix(s);
+            
             % Put everything into a struct
             count=count+1;
             Eyes(count).trial = trial;
@@ -81,11 +106,21 @@ for f=1:numel(file)
             Eyes(count).imname = imname;
             Eyes(count).fixation = fixation;
             Eyes(count).in_sac_dur = in_sac_dur;
+            Eyes(count).in_sac_pkvel = in_sac_pkvel;
+            Eyes(count).in_sac_blink = in_sac_blink;
             Eyes(count).out_sac_dur = out_sac_dur;
+            Eyes(count).out_sac_pkvel = out_sac_pkvel;
+            Eyes(count).out_sac_blink = out_sac_blink;
             Eyes(count).fix_onset = fix_onset;
             Eyes(count).fix_offset = fix_offset;
             Eyes(count).row = row;
             Eyes(count).col = col;
+            Eyes(count).fix_onset_row = fix_onset_row;
+            Eyes(count).fix_onset_col = fix_onset_col;
+            Eyes(count).fix_offset_row = fix_offset_row;
+            Eyes(count).fix_offset_col = fix_offset_col;
+            Eyes(count).badfix = badfix;
+            
         end
     end
 

@@ -8,6 +8,9 @@ pixPerCM = 27.03;
 pixeyev = 768/2 - pixPerCM*screenDistance*tan(eyev*pi/180);
 pixeyeh = 1024/2 + pixPerCM*screenDistance*tan(eyeh*pi/180);
 
+%pixeyev = 768/2 - pixPerCM*screenDistance*eyev;
+%pixeyeh = 1024/2 + pixPerCM*screenDistance*eyeh;
+
 % Detect saccades
 plotstep = 10;
 
@@ -15,8 +18,10 @@ plotstep = 10;
 b = fir1(100, 25/500);
 
 % Set some thresholds
-MINPEAK = 20; %pixels/ms
+MINPEAK = 5; %pixels/ms
 BLINKTHRESH = 1000; %pixels/ms
+STOPTHRESH = 0.5; %pixels/ms
+PATHDEVIATION = 5; %pixels
 
 for tr=1:length(onset)
 TRLEN = offset(tr)-onset(tr)+1;
@@ -64,52 +69,120 @@ if(TRLEN > 1000)
     % Detect peaks
     [pks, pktimes] = findpeaks(vel, 'minpeakheight', MINPEAK);
     
-    % Detect blinks
-    if(max(pks) > BLINKTHRESH)
-      blinkidxs = find(pks > 1.2*std(pks))';
-      % Mark peaks adjacent to blink peaks for deletion
-      adjidxs = [];
-      for bk = 1:length(blinkidxs)
-        if(blinkidxs(bk) > 1)
-          if(isempty(find(pktimes == blinkidxs(bk)-1, 1)) && pktimes(blinkidxs(bk)) - pktimes(blinkidxs(bk)-1) < 100)
-            adjidxs = [adjidxs; blinkidxs(bk)-1];
-          end
-        end
-        if(blinkidxs(bk) < length(pks))
-          if(isempty(find(pktimes == blinkidxs(bk)+1, 1)) && pktimes(blinkidxs(bk)+1) - pktimes(blinkidxs(bk)) < 100)
-            adjidxs = [adjidxs; blinkidxs(bk)+1];
-          end
-        end
-      end
-      blinkidxs = [blinkidxs; adjidxs];
-    
-      % Discard blinks
-      pks(blinkidxs) = [];
-      pktimes(blinkidxs) = [];
-    end
+%     % Detect blinks
+%     if(max(pks) > BLINKTHRESH)
+%       blinkidxs = find(pks > 1.2*std(pks))';
+%       % Mark peaks adjacent to blink peaks for deletion
+%       adjidxs = [];
+%       for bk = 1:length(blinkidxs)
+%         if(blinkidxs(bk) > 1)
+%           if(isempty(find(pktimes == blinkidxs(bk)-1, 1)) && pktimes(blinkidxs(bk)) - pktimes(blinkidxs(bk)-1) < 100)
+%             adjidxs = [adjidxs; blinkidxs(bk)-1];
+%           end
+%         end
+%         if(blinkidxs(bk) < length(pks))
+%           if(isempty(find(pktimes == blinkidxs(bk)+1, 1)) && pktimes(blinkidxs(bk)+1) - pktimes(blinkidxs(bk)) < 100)
+%             adjidxs = [adjidxs; blinkidxs(bk)+1];
+%           end
+%         end
+%       end
+%       blinkidxs = [blinkidxs; adjidxs];
+%     
+%       % Discard blinks
+%       pks(blinkidxs) = [];
+%       pktimes(blinkidxs) = [];
+%     end
     
     % Detect saccades
     for p=1:length(pktimes)
-      EyeData(tr).sacpeak(p) = pktimes(p);
-      temp = find(vel(max(pktimes(p)-100,1):pktimes(p)) < MINPEAK);
-      if(~isempty(temp))
-        EyeData(tr).sacstart(p) = max(pktimes(p) - 100 + temp(end), 1);
-      else
-        EyeData(tr).sacstart(p) = max(EyeData(tr).sacpeak(p) - 40, 1);
-      end
-        temp = find(vel(pktimes(p):min(pktimes(p)+100,TRLEN-1)) < MINPEAK);
-      if(~isempty(temp))
-        EyeData(tr).sacend(p) = pktimes(p) + temp(1);
-      else
-        EyeData(tr).sacend(p) = min(EyeData(tr).sacpeak(p) + 40, TRLEN-1);
-      end
+        % Store peak velocity
+        EyeData(tr).pkvel(p) = pks(p);
+        
+        % Label blinks
+        EyeData(tr).blink(p) = (pks(p) > BLINKTHRESH);
+        
+        % Store peak velocity timestamp
+        EyeData(tr).sacpeak(p) = pktimes(p);
+      
+        temp = find(vel(max(pktimes(p)-100,1):pktimes(p)) < STOPTHRESH);
+        if(~isempty(temp))
+            EyeData(tr).sacstart(p) = max(pktimes(p) - 100 + temp(end), 1);
+        else
+            EyeData(tr).sacstart(p) = max(EyeData(tr).sacpeak(p) - 40, 1);
+        end
+        
+        % Detect and store saccade end timestamp
+        temp = find(vel(pktimes(p):min(pktimes(p)+100,TRLEN-1)) < STOPTHRESH);
+        if(~isempty(temp))
+            EyeData(tr).sacend(p) = pktimes(p) + temp(1);
+        else
+            EyeData(tr).sacend(p) = min(EyeData(tr).sacpeak(p) + 40, TRLEN-1);
+        end
     end
     
+    % Exclude duplicates
+    if(ismember('sacend', fieldnames(EyeData(tr))))
+        toDel = [];
+        for p=1:length(EyeData(tr).sacend)
+            tmp = find(EyeData(tr).sacstart == EyeData(tr).sacstart(p));
+            if(numel(tmp) > 1)
+                toDel = [toDel, tmp(1:end-1)];
+            end
+            tmp = find(EyeData(tr).sacend == EyeData(tr).sacend(p));
+            if(numel(tmp) > 1)
+                toDel = [toDel, tmp(1:end-1)];
+            end
+        end
+        if(numel(EyeData(tr).sacend) > 0)
+            EyeData(tr).blink(toDel) = [];
+            EyeData(tr).pkvel(toDel) = [];
+            EyeData(tr).sacstart(toDel) = [];
+            EyeData(tr).sacpeak(toDel) = [];
+            EyeData(tr).sacend(toDel) = [];
+        end
+
+         % Merge peaks belonging to the same saccade
+        tmp = []; sacstarttoDel = []; sacendtoDel = [];
+        for p=1:length(EyeData(tr).sacend)-1
+            tmp = min(vel(EyeData(tr).sacend(p):EyeData(tr).sacstart(p+1)));
+            if(tmp > STOPTHRESH)
+                sacstarttoDel = [sacstarttoDel, p+1];
+                sacendtoDel = [sacendtoDel, p];
+            end
+        end
+        if(numel(EyeData(tr).sacend) > 0)
+            EyeData(tr).sacstart(sacstarttoDel) = [];
+            EyeData(tr).sacpeak(sacstarttoDel) = [];
+            EyeData(tr).blink(sacstarttoDel) = [];
+            EyeData(tr).pkvel(sacstarttoDel) = [];
+            EyeData(tr).sacend(sacendtoDel) = [];
+        end
+    end
+    % Store kinematics
     EyeData(tr).hvel = hvel;
     EyeData(tr).vvel = vvel;
     EyeData(tr).vel = vel;
     EyeData(tr).pixeyeh = pixeyeh(onset(tr):offset(tr));
     EyeData(tr).pixeyev = pixeyev(onset(tr):offset(tr));
+    
+    % Mark bad fixations
+    if(ismember('sacend', fieldnames(EyeData(tr))))
+        for p=1:length(EyeData(tr).sacend)-1
+            fixstart = EyeData(tr).sacend(p);
+            fixend = EyeData(tr).sacstart(p+1);
+            h = EyeData(tr).pixeyeh(fixstart:fixend);
+            v = 768-EyeData(tr).pixeyev(fixstart:fixend);
+
+            hm=nanmean(h);
+            vm=nanmean(v);
+            if(mean(abs(hm-h)) > PATHDEVIATION || mean(abs(vm-v)) > PATHDEVIATION || isnan(hm) || isnan(vm))
+                EyeData(tr).badfix(p) = 1;
+            else
+                EyeData(tr).badfix(p) = 0;
+            end
+        end
+    end
+    EyeData(tr).badfix(p+1) = 0;
     
     % Compute and bin saccade direction into 8 directions
     % Direction is measured w.r.t horizontal axis
@@ -128,10 +201,36 @@ if(TRLEN > 1000)
     end
     end
     
-    % Visualize saccade onsets, peaks and offsets
-    %%%plot(EyeData(tr).sacstart, vel(EyeData(tr).sacstart), 'm*', 'MarkerSize', 10);
-    %%%plot(EyeData(tr).sacstart, vel(EyeData(tr).sacstart), 'g*', 'MarkerSize', 10);
-    %%%plot(EyeData(tr).sacend, vel(EyeData(tr).sacend), 'c*', 'MarkerSize', 10);
+%     % Plot the xy gaze coordinates within the trial
+%     figure(200);  cla; hold on;
+%     plot(pixeyeh(onset(tr):offset(tr)));
+%     plot(pixeyev(onset(tr):offset(tr)), 'r');
+%     plot(vel, 'k');
+%     
+%     % Animate the detected fixations
+%     % Plot the scan path
+%     figure(100); cla; hold on;
+%     plot(pixeyeh(onset(tr):offset(tr)), 768-pixeyev(onset(tr):offset(tr)));
+%     for p=1:length(EyeData(tr).sacend)-1
+%         
+%         % Visualize each fixation
+%         fixstart = EyeData(tr).sacend(p);
+%         fixend = EyeData(tr).sacstart(p+1);
+%         h = EyeData(tr).pixeyeh(fixstart:fixend);
+%         v = 768-EyeData(tr).pixeyev(fixstart:fixend);
+%         hm=nanmean(h);
+%         vm=nanmean(v);
+%         mean(abs(hm-h)), mean(abs(vm-v))
+%         figure(100); hold on;
+%         plot(hm, vm, 'ro', 'MarkerFaceColor', 'r', 'MarkerSize', 5);
+%         
+%         
+%         % Visualize saccade onsets, peaks and offsets
+%         figure(200); hold on;
+%         plot(EyeData(tr).sacstart(p+1), vel(EyeData(tr).sacstart(p+1)), 'g*', 'MarkerSize', 10);
+%         plot(EyeData(tr).sacend(p), vel(EyeData(tr).sacend(p)), 'c*', 'MarkerSize', 10);
+%         pause
+%     end
     
     
     %%%pause
