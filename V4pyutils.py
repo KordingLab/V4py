@@ -133,72 +133,65 @@ def poisson_logloss(y, yhat, ynull):
     R2 = 1-(LS-L1)/(LS-L0)
 
     return R2
-    
+
 #---------------------------------------
 def XGB_poisson(Xr, Yr, Xt):
     param = {'objective': "count:poisson",
     'eval_metric': "logloss",
     'num_parallel_tree': 2,
-    'eta':0.07,
-    'gamma':1, # default = 0
+    'eta': 0.07,
+    'gamma': 1, # default = 0
     'max_depth': 1,
     #'num_class': 1,
     #'colsample_bytree':0.7,
     'subsample': 0.5,
-    'seed':2925,
-    'silent':1}
-    param['nthread'] = 12
+    'seed': 2925,
+    'silent': 1,
+    'missing': '-999.0'}
+    param['nthread'] = -1
 
     dtrain = xgb.DMatrix( Xr, label=Yr)
     dtest = xgb.DMatrix( Xt)
 
-    num_round = 800
+    num_round = 200
     bst = xgb.train( param, dtrain, num_round )
 
     Yt = bst.predict( dtest )
     return Yt
 
 #---------------------------------------
-def fit_cv(X, Y, algorithm = 'XGBoost',n_cv=10, silent=1):
+def fit_cv(X, Y, algorithm = 'XGBoost',n_cv=10, verbose=1):
 
     if np.ndim(X)==1:
         X = np.transpose(np.atleast_2d(X))
 
     #skf = StratifiedKFold(Y, n_cv, shuffle=True, random_state=1)
     skf  = KFold(n=np.size(Y), n_folds=n_cv, shuffle=False,random_state=None)
-    #print np.shape(X[:,0])
     #skf  = LabelKFold(X['trial'].values, n_folds=n_cv)
-    i=1
 
+    i=1
     Y_hat=np.zeros(len(Y))
     pR2_cv = []
 
-    for train, test in skf:
-        if not silent:
+    for idx_r, idx_t in skf:
+        if verbose > 1:
             print '...runnning cv-fold', i, 'of', n_cv
         i+=1
-        idx_t = test
-        idx_r = train
-        #Xr = X.values[idx_r,:]
-        Xr = X[idx_r,:]
-
+        Xr = X[idx_r, :]
         Yr = Y[idx_r]
-        #Xt = X.values[idx_t,:]
-        Xt = X[idx_t,:]
-
+        Xt = X[idx_t, :]
         Yt = Y[idx_t]
 
-        Yt_hat = eval(algorithm)(Xr, Yr , Xt)
-
-        Y_hat[idx_t]= Yt_hat
+        Yt_hat = eval(algorithm)(Xr, Yr, Xt)
+        Y_hat[idx_t] = Yt_hat
 
         pR2 = poisson_logloss(Yt, Yt_hat, np.mean(Yr))
         pR2_cv.append(pR2)
 
-        if not silent:
+        if verbose > 1:
             print 'pR2: ', pR2
 
-    if not silent:
+    if verbose > 0:
         print("pR2_cv: %0.6f (+/- %0.6f)" % (np.mean(pR2_cv), np.std(pR2_cv)/np.sqrt(n_cv)))
 
     return Y_hat, pR2_cv
