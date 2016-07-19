@@ -135,7 +135,7 @@ def bin_it(hue, params):
 #---------------------------------------
 # Helpers for fitting models
 #---------------------------------------
-def poisson_logloss(y, yhat, ynull):
+def poisson_pseudoR2(y, yhat, ynull):
     eps=np.spacing(1)
 
     L1 = np.sum(y*np.log(eps+yhat) - yhat)
@@ -173,7 +173,7 @@ def XGB_poisson(Xr, Yr, Xt):
     return Yt
 
 #---------------------------------------
-def fit_cv(X, Y, algorithm = 'XGBoost',n_cv=10,
+def fit_cv(X, Y, algorithm = 'XGB_poisson',n_cv=10,
            verbose=1, label=[]):
 
     if np.ndim(X)==1:
@@ -203,7 +203,7 @@ def fit_cv(X, Y, algorithm = 'XGBoost',n_cv=10,
         Yt_hat = eval(algorithm)(Xr, Yr, Xt)
         Y_hat[idx_t] = Yt_hat
 
-        pR2 = poisson_logloss(Yt, Yt_hat, np.mean(Yr))
+        pR2 = poisson_pseudoR2(Yt, Yt_hat, np.mean(Yr))
         pR2_cv.append(pR2)
 
         if verbose > 1:
@@ -457,10 +457,13 @@ def plot_psth(psth, event_name='event_onset',
         plt.legend(legend, frameon=False)
 
 
-def plot_var_vs_counts(x_variable=None, y_counts=None, models_fit=Models_nat,
+def plot_var_vs_counts(x_variable=None, y_counts=None, models_fit=None,
                        model='hue', lowess_frac = 0.3, xlabel='variable',
-                       xnoise=0, ynoise=0.5, semilogx=False, model_alpha=0.1):
+                       xnoise=0, ynoise=0.5, semilogx=False, model_alpha=0.1,
+                       colors=['#F5A21E', '#EF3E34', '#134B64',  '#02A68E',
+                       '#FF07CD'], data_ms = 10):
 
+    lowess = sm.nonparametric.lowess
     yt_hat = models_fit[model]['Yt_hat']
     w_counts = lowess(y_counts, x_variable, frac=lowess_frac)
     w_model = lowess(yt_hat, x_variable, frac=lowess_frac)
@@ -469,13 +472,17 @@ def plot_var_vs_counts(x_variable=None, y_counts=None, models_fit=Models_nat,
     noise_y = ynoise*np.random.rand(np.size(y_counts))
 
     if semilogx:
-        plt.semilogx(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1)
-        plt.semilogx(x_variable+noise_x, yt_hat, 'r.', alpha=model_alpha)
+        plt.semilogx(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1,
+                     ms=data_ms)
+        plt.semilogx(x_variable+noise_x, yt_hat, '.', color=colors[1],
+                     alpha=model_alpha)
         plt.semilogx(w_counts[:,0], w_counts[:,1], color='k', lw=4)
         plt.semilogx(w_model[:,0], w_model[:,1], color=colors[0], lw=4)
     else:
-        plt.plot(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1)
-        plt.plot(x_variable+noise_x, yt_hat, 'r.', alpha=model_alpha)
+        plt.plot(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1,
+        ms=data_ms)
+        plt.plot(x_variable+noise_x, yt_hat, '.', color=colors[1],
+                 alpha=model_alpha)
         plt.plot(w_counts[:,0], w_counts[:,1], color='k', lw=4)
         plt.plot(w_model[:,0], w_model[:,1], color=colors[0], lw=4)
 
