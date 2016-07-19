@@ -55,6 +55,11 @@ def onehothue(theta, n_bins=16):
     h = np.array(h)
     return h
 
+#---------------------------------------
+def circkurtosis(theta):
+    ck = 0.5 * (stats.kurtosis(theta) + \
+         stats.kurtosis(np.arctan(np.sin(theta + np.pi), np.cos(theta + np.pi))))
+    return ck
 
 #---------------------------------------
 # Helpers for image manipulation
@@ -321,39 +326,6 @@ def plot_model_vs_time(model_for_plot, Y=None, models=None,
 
 
 # -----------------------------------------------------------------
-def plot_lowess_vs_lowess(model_for_plot, Y=None, models=None,
-                       x_variable='',
-                       title=False, lowess_frac=0.1,
-                       color='r'):
-
-    lowess = sm.nonparametric.lowess
-
-
-    y_counts_simul = np.random.poisson(models[model_for_plot]['Yt_hat'])
-    y_counts = Y
-
-    w = lowess(y_counts, x_variable, frac=lowess_frac)
-    w_simul = lowess(y_counts_simul, x_variable, frac=lowess_frac)
-
-
-    plt.plot(x_variable, y_counts+0.5*np.random.rand(np.size(y_counts)), 'k.', alpha=0.1, ms=10)
-    plt.plot(x_variable, models[model_for_plot]['Yt_hat'], '.', c=color, alpha=0.5, lw=0.3)
-    plt.plot(w[:,0], w[:,1], 'k', lw=3)
-    plt.plot(w_simul[:,0], w_simul[:,1], 'm', lw=3)
-
-    if title:
-        plt.title(title)
-    ax = plt.gca()
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    plt.tick_params(axis='y', right='off')
-    plt.tick_params(axis='x', top='off')
-    plt.xlabel('time [s]')
-    plt.ylabel('spk counts; Yt_hat')
-
-    plt.legend(['counts (data)','model %s' % model_for_plot,'smoothed data','smoothed simul data'], frameon=False, loc=0)
-
-# -----------------------------------------------------------------
 def plot_model_comparison(models_for_plot, models=[], color='r', title=None):
 
     plt.plot([-1, len(models_for_plot)],[0,0],'--k', alpha=0.4)
@@ -401,3 +373,117 @@ def plot_tuning_curve(models_for_plot, hues=[], Y=[], models=[], title='',
     plt.legend(['counts (Y)'] + models_for_plot, frameon=False)
     if title:
         plt.title(title)
+
+
+def plot_psth(psth, event_name='event_onset',
+            condition_names=None, figsize=(8, 4), xlim=None, ylim=None,
+            colors=['#F5A21E', '#134B64', '#EF3E34', '#02A68E', '#FF07CD']):
+        """
+        Plot psth
+        Parameters
+        ----------
+        psth: dict, output of get_psth method
+        event_name: string, legend name for event
+        condition_names: list, legend names for the conditions
+        figsize:
+            tuple of integers, optional, default: (8, 4) width, height
+            in inches.
+        xlim: list
+        ylim: list
+        colors: list
+        """
+
+
+        window = psth['window']
+        binsize = psth['binsize']
+        conditions = psth['conditions']
+
+        scale = 0.1
+        y_min = (1.0-scale)*np.nanmin([np.min( \
+            psth['data'][psth_idx]['mean']) \
+            for psth_idx in psth['data']])
+        y_max = (1.0+scale)*np.nanmax([np.max( \
+            psth['data'][psth_idx]['mean']) \
+            for psth_idx in psth['data']])
+
+        legend = [event_name]
+
+        time_bins = np.arange(window[0],window[1],binsize) + binsize/2.0
+
+        if ylim:
+            plt.plot([0, 0], ylim, color='k', ls='--')
+        else:
+            plt.plot([0, 0], [y_min, y_max], color='k', ls='--')
+
+        for i in psth['data']:
+            if np.all(np.isnan(psth['data'][i]['mean'])):
+                plt.plot(0,0,alpha=1.0, color=colors[i])
+            else:
+                plt.plot(time_bins, psth['data'][i]['mean'],
+                color=colors[i], lw=1.5)
+
+        for i in psth['data']:
+            if len(conditions) > 0:
+                if condition_names:
+                    legend.append(condition_names[i])
+                else:
+                    legend.append('Condition %d' % (i+1))
+            else:
+                legend.append('all')
+
+            if not np.all(np.isnan(psth['data'][i]['mean'])):
+                plt.fill_between(time_bins, psth['data'][i]['mean'] - \
+                psth['data'][i]['sem'], psth['data'][i]['mean'] + \
+                psth['data'][i]['sem'], color=colors[i], alpha=0.2)
+
+        #plt.title('neuron %s' % self.name)
+        plt.xlabel('time [ms]')
+        plt.ylabel('spikes per second [spks/s]')
+
+        if xlim:
+            plt.xlim(xlim)
+        if ylim:
+            plt.ylim(ylim)
+        else:
+            plt.ylim([y_min, y_max])
+
+        ax = plt.gca()
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tick_params(axis='y', right='off')
+        plt.tick_params(axis='x', top='off')
+
+        plt.legend(legend, frameon=False)
+
+
+def plot_var_vs_counts(x_variable=None, y_counts=None, models_fit=Models_nat,
+                       model='hue', lowess_frac = 0.3, xlabel='variable',
+                       xnoise=0, ynoise=0.5, semilogx=False, model_alpha=0.1):
+
+    yt_hat = models_fit[model]['Yt_hat']
+    w_counts = lowess(y_counts, x_variable, frac=lowess_frac)
+    w_model = lowess(yt_hat, x_variable, frac=lowess_frac)
+
+    noise_x = xnoise*np.random.rand(np.size(x_variable))
+    noise_y = ynoise*np.random.rand(np.size(y_counts))
+
+    if semilogx:
+        plt.semilogx(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1)
+        plt.semilogx(x_variable+noise_x, yt_hat, 'r.', alpha=model_alpha)
+        plt.semilogx(w_counts[:,0], w_counts[:,1], color='k', lw=4)
+        plt.semilogx(w_model[:,0], w_model[:,1], color=colors[0], lw=4)
+    else:
+        plt.plot(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1)
+        plt.plot(x_variable+noise_x, yt_hat, 'r.', alpha=model_alpha)
+        plt.plot(w_counts[:,0], w_counts[:,1], color='k', lw=4)
+        plt.plot(w_model[:,0], w_model[:,1], color=colors[0], lw=4)
+
+    ax=plt.gca()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tick_params(axis='y', right='off')
+    plt.tick_params(axis='x', top='off')
+    plt.xlabel(xlabel)
+    plt.ylabel('spike counts')
+    plt.legend(['data', 'model %s' % model, 'smoothed data', 'smoothed model'], frameon=False)
