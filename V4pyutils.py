@@ -25,8 +25,6 @@ from sklearn.cross_validation import LabelKFold
 import matplotlib.pyplot as plt
 
 
-
-
 #---------------------------------------
 # Helpers for feature extraction
 #---------------------------------------
@@ -42,14 +40,14 @@ def onehothue(theta, n_bins=16):
     eps = np.finfo(np.float32).eps
     if theta.ndim == 0:
         h = np.histogram(theta,
-            bins=n_bins,
-            range=(-np.pi-eps, np.pi+eps))[0]
+                         bins=n_bins,
+                         range=(-np.pi-eps, np.pi+eps))[0]
     elif theta.ndim == 1:
         h = list()
         for th in theta:
             h.append(np.histogram(th,
-                bins=n_bins,
-                range=(-np.pi-eps, np.pi+eps))[0])
+                     bins=n_bins,
+                     range=(-np.pi-eps, np.pi+eps))[0])
     else:
         print 'Error: theta has to be a scalar or 1-d array'
     h = np.array(h)
@@ -58,7 +56,8 @@ def onehothue(theta, n_bins=16):
 #---------------------------------------
 def circkurtosis(theta):
     ck = 0.5 * (stats.kurtosis(theta) + \
-         stats.kurtosis(np.arctan(np.sin(theta + np.pi), np.cos(theta + np.pi))))
+         stats.kurtosis(np.arctan(np.sin(theta + np.pi),
+                                         np.cos(theta + np.pi))))
     return ck
 
 #---------------------------------------
@@ -71,6 +70,7 @@ def get_image(fx, stimpath):
     I = cv2.imread(filename)
     I = cv2.cvtColor(I, cv2.COLOR_BGR2RGB)
     return I
+
 #------------------------------------------
 def pad_image(I):
     [H,W,D] = I.shape
@@ -108,7 +108,6 @@ def visualize_hue_image(I):
 
     # Convert back to RGB just to visualize
     Iviz = cv2.cvtColor(Luv, cv2.COLOR_LUV2RGB);
-
     return Iviz
 
 #------------------------------------------
@@ -121,7 +120,8 @@ def grid_image(I, gridshape):
     count = 0
     for i in range(R):
         for j in range(C):
-            Block[count :, :, :] = I[b_rows * i:b_rows * (i+1), b_cols * j:b_cols *(j+1), :]
+            Block[count :, :, :] = I[b_rows * i:b_rows * (i+1),
+                                     b_cols * j:b_cols *(j+1), :]
             count += 1
     return Block
 
@@ -136,15 +136,12 @@ def bin_it(hue, params):
 # Helpers for fitting models
 #---------------------------------------
 def poisson_pseudoR2(y, yhat, ynull):
-    eps=np.spacing(1)
-
+    eps = np.spacing(1)
     L1 = np.sum(y*np.log(eps+yhat) - yhat)
     L1_v = y*np.log(eps+yhat) - yhat
-    #print np.shape(L1_v)
     L0 = np.sum(y*np.log(eps+ynull) - ynull)
     LS = np.sum(y*np.log(eps+y) - y)
     R2 = 1-(LS-L1)/(LS-L0)
-
     return R2
 
 #---------------------------------------
@@ -155,8 +152,6 @@ def XGB_poisson(Xr, Yr, Xt):
     'eta': 0.07,
     'gamma': 1, # default = 0
     'max_depth': 1,
-    #'num_class': 1,
-    #'colsample_bytree':0.7,
     'subsample': 0.5,
     'seed': 2925,
     'silent': 1,
@@ -167,30 +162,25 @@ def XGB_poisson(Xr, Yr, Xt):
     dtest = xgb.DMatrix(Xt)
 
     num_round = 200
-    bst = xgb.train( param, dtrain, num_round )
+    bst = xgb.train(param, dtrain, num_round)
 
-    Yt = bst.predict( dtest )
+    Yt = bst.predict(dtest)
     return Yt
 
 #---------------------------------------
-def fit_cv(X, Y, algorithm = 'XGB_poisson',n_cv=10,
-           verbose=1, label=[]):
+def fit_cv(X, Y, algorithm = 'XGB_poisson', n_cv=10, verbose=1, label=[]):
 
     if np.ndim(X)==1:
         X = np.transpose(np.atleast_2d(X))
 
-    #skf = StratifiedKFold(Y, n_cv, shuffle=True, random_state=1)
     if len(label)>0:
         skf  = LabelKFold(np.squeeze(label), n_folds=n_cv)
     else:
         skf  = KFold(n=np.size(Y), n_folds=n_cv, shuffle=True, random_state=42)
 
-    #skf  = LabelKFold(X['trial'].values, n_folds=n_cv)
-
     i=1
     Y_hat=np.zeros(len(Y))
-    pR2_cv = []
-
+    pR2_cv = list()
     for idx_r, idx_t in skf:
         if verbose > 1:
             print '...runnning cv-fold', i, 'of', n_cv
@@ -210,18 +200,22 @@ def fit_cv(X, Y, algorithm = 'XGB_poisson',n_cv=10,
             print 'pR2: ', pR2
 
     if verbose > 0:
-        print("pR2_cv: %0.6f (+/- %0.6f)" % (np.mean(pR2_cv), np.std(pR2_cv)/np.sqrt(n_cv)))
+        print("pR2_cv: %0.6f (+/- %0.6f)" % (np.mean(pR2_cv),
+                                             np.std(pR2_cv)/np.sqrt(n_cv)))
 
     return Y_hat, pR2_cv
 
+#---------------------------------------
+# Helpers for visualization
+#---------------------------------------
 # -----------------------------------------------------------------
 def plot_predicted_vs_counts(models_for_plot, Y = None, models = None,
                              title = '',
-                             colors=['#F5A21E', '#134B64', '#EF3E34', '#02A68E', '#FF07CD'], ylim=None,
-                             simul=False):
+                             colors=['#F5A21E', '#134B64', '#EF3E34',
+                                     '#02A68E', '#FF07CD'],
+                             ylim=None, simul=False):
 
     plt.title(title)
-
     unique_counts = np.unique(Y)
 
     for i, model in enumerate(models_for_plot):
@@ -231,7 +225,6 @@ def plot_predicted_vs_counts(models_for_plot, Y = None, models = None,
             Ycounts = Y
 
         if len(models_for_plot)==1:
-
 
             plt.plot(Ycounts + 0.2*np.random.normal(size=np.size(Ycounts)),
                  models[model]['Yt_hat'],
@@ -245,8 +238,11 @@ def plot_predicted_vs_counts(models_for_plot, Y = None, models = None,
             meanYhat.append(np.mean(models[model]['Yt_hat'][loc]))
             semYhat.append(np.std(models[model]['Yt_hat'])/np.sqrt(len(loc)))
 
-        plt.plot(np.unique(Y), meanYhat, '.', color=colors[i],  ms=15, alpha=0.9)
-        plt.errorbar(np.unique(Y), meanYhat, fmt='none', yerr=np.array(semYhat), alpha=0.5, ecolor=colors[i])
+        plt.plot(np.unique(Y), meanYhat, '.', color=colors[i],
+                 ms=15, alpha=0.9)
+        plt.errorbar(np.unique(Y), meanYhat, fmt='none',
+                     yerr=np.array(semYhat), alpha=0.5,
+                     ecolor=colors[i])
 
     plt.ylabel('predicted (Y_hat)')
     if simul:
@@ -269,14 +265,14 @@ def plot_predicted_vs_counts(models_for_plot, Y = None, models = None,
     else:
         plt.legend([''] + models_for_plot, frameon=False, loc=0)
 
-    #plt.axis('equal')
 
 # -----------------------------------------------------------------
 def plot_model_vs_model(models_for_plot, models=None, title=''):
     max_val = np.max(models[models_for_plot[1]]['Yt_hat'])
     min_val = np.min(models[models_for_plot[1]]['Yt_hat'])
-    plt.plot([min_val,max_val],[min_val,max_val], '-r', lw=0.6)
-    plt.plot(models[models_for_plot[0]]['Yt_hat'], models[models_for_plot[1]]['Yt_hat'], 'k.', alpha=0.1, ms=10)
+    plt.plot([min_val, max_val],[min_val, max_val], '-r', lw=0.6)
+    plt.plot(models[models_for_plot[0]]['Yt_hat'],
+             models[models_for_plot[1]]['Yt_hat'], 'k.', alpha=0.1, ms=10)
 
     plt.xlabel('model ' + models_for_plot[0])
     plt.ylabel('model ' + models_for_plot[1])
@@ -290,45 +286,9 @@ def plot_model_vs_model(models_for_plot, models=None, title=''):
     plt.axis('equal')
 
 # -----------------------------------------------------------------
-def plot_model_vs_time(model_for_plot, Y=None, models=None,
-                       x_variable=None,
-                       title=False, lowess_frac=0.1, simul=False,
-                       color='r'):
-
-    lowess = sm.nonparametric.lowess
-
-    if simul:
-        y_counts = np.random.poisson(models[model_for_plot]['Yt_hat'])
-    else:
-        y_counts = Y
-
-    w = lowess(y_counts, x_variable, frac=lowess_frac)
-
-
-    plt.plot(x_variable, y_counts+0.5*np.random.rand(np.size(y_counts)), 'k.', alpha=0.1, ms=10)
-    plt.plot(x_variable, models[model_for_plot]['Yt_hat'], '.', c=color, alpha=0.5, lw=0.3)
-    plt.plot(w[:,0], w[:,1], 'k', lw=3)
-
-    if title:
-        plt.title(title)
-    ax = plt.gca()
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    plt.tick_params(axis='y', right='off')
-    plt.tick_params(axis='x', top='off')
-    plt.xlabel('time [s]')
-    plt.ylabel('spk counts; Yt_hat')
-    if simul:
-        plt.legend(['simul counts (data)','model %s' % model_for_plot,'smoothed simul data'],
-                   frameon=False, loc=0)
-    else:
-        plt.legend(['counts (data)','model %s' % model_for_plot,'smoothed data'], frameon=False, loc=0)
-
-
-# -----------------------------------------------------------------
 def plot_model_comparison(models_for_plot, models=[], color='r', title=None):
 
-    plt.plot([-1, len(models_for_plot)],[0,0],'--k', alpha=0.4)
+    plt.plot([-1, len(models_for_plot)], [0,0],'--k', alpha=0.4)
 
     mean_pR2 = list()
     sem_pR2 = list()
@@ -354,13 +314,15 @@ def plot_model_comparison(models_for_plot, models=[], color='r', title=None):
 
 # -----------------------------------------------------------------
 def plot_tuning_curve(models_for_plot, hues=[], Y=[], models=[], title='',
-                      colors=['#F5A21E', '#134B64', '#EF3E34', '#02A68E', '#FF07CD']):
+                      colors=['#F5A21E', '#134B64', '#EF3E34',
+                              '#02A68E', '#FF07CD']):
 
     plt.plot(hues, Y + 0.01*np.random.normal(size=np.size(hues)),
              'k.', alpha=0.1, markersize=20)
 
     for i, model in enumerate(models_for_plot):
-        plt.plot(hues, models[model]['Yt_hat'], '.', color=colors[i], alpha = 0.5)
+        plt.plot(hues, models[model]['Yt_hat'], '.',
+                 color=colors[i], alpha = 0.5)
 
     plt.xlabel('hue angle [rad]')
     plt.ylabel('spike counts')
@@ -436,7 +398,6 @@ def plot_psth(psth, event_name='event_onset',
                 psth['data'][i]['sem'], psth['data'][i]['mean'] + \
                 psth['data'][i]['sem'], color=colors[i], alpha=0.2)
 
-        #plt.title('neuron %s' % self.name)
         plt.xlabel('time [ms]')
         plt.ylabel('spikes per second [spks/s]')
 
@@ -480,7 +441,7 @@ def plot_var_vs_counts(x_variable=None, y_counts=None, models_fit=None,
         plt.semilogx(w_model[:,0], w_model[:,1], color=colors[0], lw=4)
     else:
         plt.plot(x_variable+noise_x, y_counts+noise_y, 'k.', alpha=0.1,
-        ms=data_ms)
+                 ms=data_ms)
         plt.plot(x_variable+noise_x, yt_hat, '.', color=colors[1],
                  alpha=model_alpha)
         plt.plot(w_counts[:,0], w_counts[:,1], color='k', lw=4)
@@ -493,4 +454,5 @@ def plot_var_vs_counts(x_variable=None, y_counts=None, models_fit=None,
     plt.tick_params(axis='x', top='off')
     plt.xlabel(xlabel)
     plt.ylabel('spike counts')
-    plt.legend(['data', 'model %s' % model, 'smoothed data', 'smoothed model'], frameon=False)
+    plt.legend(['data', 'model %s' % model, 'smoothed data', 'smoothed model'],
+               frameon=False)
