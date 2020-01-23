@@ -14,7 +14,7 @@ import glob
 import deepdish as dd
 
 # image
-import cv2
+#import cv2
 
 # stats
 #import pycircstat as pyc
@@ -22,13 +22,14 @@ from scipy import stats
 import statsmodels.api as sm
 
 # spykes
-from spykes.neuropop import NeuroPop
-from spykes.neurovis import NeuroVis
+#from spykes.neuropop import NeuroPop
+#c from spykes.neurovis import NeuroVis
 
 # machine learning
 import xgboost as xgb
 from sklearn.cross_validation import KFold
 from sklearn.cross_validation import LabelKFold
+import keras
 from keras.models import Sequential
 from keras.layers.core import Flatten, Dense, Dropout
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, ZeroPadding2D
@@ -589,11 +590,20 @@ def circkurtosis(theta):
 #---------------------------------------
 # Helpers for image manipulation
 #---------------------------------------
+def bgr_to_rgb(I):
+    """Asserts channels last"""
+    assert I.shape[2]==3
+    I_copy = I.copy()
+    I_copy[:,:,0] = I[:,:,2]
+    I_copy[:,:,2] = I[:,:,0]
+    return I_copy
+
 def get_image(stimpath, impath, imname):
     filename = stimpath+'/'+impath+'/'+imname
-    I = cv2.imread(filename)
+    I = plt.imread(filename)
     if I is not None:
-        I = cv2.cvtColor(I, cv2.COLOR_BGR2RGB)
+        # BGR to RGB
+        I = bgr_to_rgb(I)
     return I
 
 #------------------------------------------
@@ -616,9 +626,10 @@ def preprocess_image(I, imsize=(224, 224)):
 #------------------------------------------
 def get_hue_image(I):
     # Convert to Luv
+    # Convert to Luv
     I = I.astype(np.float32)
-    I *= 1./255;
-    Luv = cv2.cvtColor(I, cv2.COLOR_RGB2LUV);
+    I *= 1./255
+    Luv = rgb2luv(I)
 
     # Extract hue
     hue = np.arctan2(Luv[:,:,2], Luv[:,:,1])
@@ -655,15 +666,18 @@ def grid_image(I, gridshape):
     gridshape  = () 2D list or tuple of # of grids"""
     R = gridshape[0]
     C = gridshape[1]
+    dtype_ = I.dtype
     b_rows = np.int(np.floor(I.shape[0]/R))
     b_cols = np.int(np.floor(I.shape[1]/C))
     Block = np.zeros([R * C, b_rows, b_cols, I.shape[2]])
     count = 0
     for i in range(R):
         for j in range(C):
-            Block[count :, :, :] = I[b_rows * i:b_rows * (i+1),
+            I_cut = I[b_rows * i:b_rows * (i+1),
                                      b_cols * j:b_cols *(j+1), :]
+            Block[count] = I_cut
             count += 1
+    Block = Block.astype(dtype_) 
     return Block
 
 #------------------------------------------
@@ -672,6 +686,33 @@ def get_hue_histogram(hue, n_bins):
     h = np.histogram(hue, bins=n_bins,
                      range=(-np.pi-eps, np.pi+eps))[0]
     return h/float(np.sum(h))
+
+from skimage.color import luv2rgb, rgb2luv
+
+def weighted_hue_histogram(I, n_bins):
+    """Returns the hue histogram of image I, but with each pixels;s hue contribution weighted by its distance
+    from the LUV long axis.
+    
+    Inputs:
+    =======
+    I = RGB image"""
+    
+    # Convert to Luv
+    I = I.astype(np.float32)
+    I *= 1./255
+    Luv = rgb2luv(I)
+    
+    # get hues
+    hue = np.arctan2(Luv[:,:,2], Luv[:,:,1])
+    # and "saturation": dist from the LUV central axis
+    saturation = np.sqrt(np.square(Luv[:,:,2]) + np.square(Luv[:,:,1]))
+
+    eps = np.finfo(np.float32).eps
+    h = np.histogram(hue, bins=n_bins, weights=saturation,
+                     range=(-np.pi-eps, np.pi+eps))[0]
+    h = h/float(hue.size*100)
+    
+    return h
 
 def prepare_image_for_vgg(im):
     """
@@ -689,11 +730,53 @@ def prepare_image_for_vgg(im):
     im_for_vgg = im_for_vgg.transpose((2, 0, 1))
     im_for_vgg = np.expand_dims(im_for_vgg, axis=0)
     return im_for_vgg
+
+
+from skimage.color import luv2rgb, rgb2luv
+
+def replace_with_gray(I, hue_range, saturation = 0):
+    """Replaces a range of hues with isoluminant grey. Uses the LUV color space, taking U,V to some percentage
+    of their original values (set with 'saturation').
+    
+    Inputs:
+    =======
+    I = RGB image
+    hue_range = (low_lim, high_lim), tuple of hue range (in radians, [-pi, pi]) to bring to grey. 
+                Currently no support for intervals that include 0
+    saturdation  = [0,1] """
+    
+    # Convert to Luv
+    I = I.astype(np.float32)
+    I *= 1./255
+    Luv = rgb2luv(I)
+    
+    # Take down hue, keeping luminance
+    just_lum = Luv.copy()
+    just_lum[:,:,1:] = saturation * just_lum[:,:,1:]
+    
+    # get hues
+    hue = np.arctan2(Luv[:,:,2], Luv[:,:,1])
+    in_range = ((hue > hue_range[0]) & (hue < hue_range[1]))
+            #take this 2d array to 3d
+    in_range_3d = np.broadcast_to(in_range[:,:,np.newaxis],Luv.shape)
+
+    # return [L,0,0] if in range, or original pixel if not
+    Luv_prime = np.where(in_range_3d,just_lum, Luv)
+    
+    # Bring back to RGB
+    I_prime =   luv2rgb(Luv_prime)*255
+    
+    # scale back upwards by 256 and round to recover (mad annoying that this is the case.)
+    I_prime = I_prime.astype(np.uint8)
+    
+    return I_prime
+
 #-------------------------------------------
 from tqdm import tqdm
+
 def get_nat_features(df, 
-                     reject_conditions=None,
-                     stimpath=None,
+                     reject_conditions={'filters.in_screen_radius': True, 'filters.badfix' : False},
+                     stimpath='../V4pydata',
                      radius=200, RF_block=14,
                      n_histogram_bins=16,
                      model_list=['histogram'],
@@ -705,84 +788,83 @@ def get_nat_features(df,
     image_features = list()      # image features
     non_image_features = list()  # non-image features
     accepted_indices = list()
-    
+
     if 'vgg' in model_list:
         # Instantiate vgg models
-        vgg_model_l8 = V4.transfer_learning(architecture_file='../02-preprocessed_data/vgg16_architecture.json',
-                                            weights_file='../02-preprocessed_data/vgg16_weights.h5',
-                                            n_pops=0)
-        vgg_model_l7 = V4.transfer_learning(architecture_file='../02-preprocessed_data/vgg16_architecture.json',
-                                            weights_file='../02-preprocessed_data/vgg16_weights.h5',
-                                            n_pops=1)
-        vgg_model_l6 = V4.transfer_learning(architecture_file='../02-preprocessed_data/vgg16_architecture.json',
-                                            weights_file='../02-preprocessed_data/vgg16_weights.h5',
-                                            n_pops=3)
-        vgg_model_l5 = V4.transfer_learning(architecture_file='../02-preprocessed_data/vgg16_architecture.json',
-                                            weights_file='../02-preprocessed_data/vgg16_weights.h5',
-                                            n_pops=5)
+        vgg_model_l8 = vgg_transfer_ari(n_pops=0)
+        vgg_model_l7 = vgg_transfer_ari(n_pops=1)
+        vgg_model_l6 = vgg_transfer_ari(n_pops=2)
+        vgg_model_l5 = vgg_transfer_ari(n_pops=3)
+
     # Loop through the data frame
     for fx in tqdm(df.index):
-        
+
         # Check for reject conditions
         select = list()
         for k in reject_conditions.keys():
             select.append(df.loc[fx][k] == reject_conditions[k])
         select = np.all(select)
-        
+
         prev_impath, prev_imname = None, None
         if select == True:
             # Open image file
             impath = df.loc[fx]['im.path']
             imname = df.loc[fx]['im.name']
             if(impath != prev_impath or imname != prev_imname):
-                I = V4.get_image(stimpath=stimpath, impath=impath, imname=imname)
+                I = get_image(stimpath=stimpath, impath=impath, imname=imname)
             prev_impath, prev_imname = impath, imname
             
-            # Check for missing image file
+                        # Check for missing image file
             if I is None: 
                 continue
-            
-            # Cut relevant fixation
-            r, c = df.loc[fx]['predictors.row'], df.loc[fx]['predictors.col']
+
+          
+
+            # Cut relevant fixation (maybe again)
+            r, c = int(df.loc[fx]['predictors.row']), int(df.loc[fx]['predictors.col'])
             I_fix = I[r-radius:r+radius, c-radius:c+radius, :]
-            
+
+
             # Grid image into blocks
-            Block = V4.grid_image(I_fix, [4, 4])
-            
+            Block = grid_image(I_fix, [4, 4])
+
             this_image_feature = dict()
             # Extract feature for desired image
-            
+
             if 'histogram' in model_list:
-                hue_image = V4.get_hue_image(Block[RF_block]) 
+                hue_image = get_hue_image(Block[RF_block]) 
                 this_image_feature['hue.histogram'] = \
-                   list(V4.get_hue_histogram(hue_image, n_bins=n_histogram_bins))
+                   list(get_hue_histogram(hue_image, n_bins=n_histogram_bins))
                 this_image_feature['hue.mean'] = circmean(hue_image)
                 this_image_feature = pd.Series(this_image_feature)
-                
+
             if 'vgg' in model_list:
-                # Prepare the image for vgg input               
-                I_fix_for_vgg = V4.prepare_image_for_vgg(I_fix[::-1])
-                
+                # Prepare the image for vgg input
+                I_fix_resize = cv2.resize(I_fix, (224,224)).astype('float32')
+                I_fix_for_vgg = preprocess_input( np.expand_dims(I_fix_resize, axis=0) )
+
                 # Compute feed forward pass
                 this_image_feature['vgg.l8'] = np.squeeze(vgg_model_l8.predict(I_fix_for_vgg))
                 this_image_feature['vgg.l7'] = np.squeeze(vgg_model_l7.predict(I_fix_for_vgg))
                 this_image_feature['vgg.l6'] = np.squeeze(vgg_model_l6.predict(I_fix_for_vgg))
                 this_image_feature['vgg.l5'] = np.squeeze(vgg_model_l5.predict(I_fix_for_vgg))
-              
+
             # Accumulate non-image features
             this_non_image_feature = df.loc[fx][non_image_features_list]
-            
+
             # Collect features in a list
             image_features.append(this_image_feature)
             non_image_features.append(this_non_image_feature)
             accepted_indices.append(fx)
-            
+
     # Put everything into a data frame
     nat_features = pd.DataFrame({'image_features': image_features, 
                                  'non_image_features': non_image_features,
                                  'accepted_indices': accepted_indices})
+
     return nat_features
-#_-------------------------------
+
+#--------------------------------
 def nat_features_to_array(nat_features_df, image_feature='hue.histogram'):
     """
     Take a data frame containing features of interest
@@ -826,17 +908,20 @@ def poisson_pseudo_R2(y, yhat, ynull):
 
 #---------------------------------------
 def XGB_poisson(Xr, Yr, Xt):
-    param = {'objective': "count:poisson",
-    'eval_metric': "logloss",
-    'num_parallel_tree': 2,
-    'eta': 0.07,
-    'gamma': 1, # default = 0
-    'max_depth': 2,
-    'subsample': 0.5,
-    'seed': 2925,
-    'silent': 1,
-    'missing': '-999.0'}
+    param = {'eta': 0.08340648569833894,
+             'gamma': 0.2933105726714027,
+             'max_depth':3,
+             'num_parallel_tree': 2,
+             'subsample': 0.4967204175437221}
     param['nthread'] = 8
+    param['objective']= "count:poisson"
+    param['eval_metric']=  "logloss"
+    param['seed']=  2925
+    param['silent']=  1
+    param['missing']=  '-999.0'
+    param['nthread'] = 8
+    param['tree_method'] = 'hist'
+  
 
     dtrain = xgb.DMatrix(Xr, label=Yr)
     dtest = xgb.DMatrix(Xt)
@@ -871,19 +956,66 @@ def keras_GLM(input_dim, hidden_dim, learning_rate=0.0001,l1l2 = 0.01):
     model.compile(loss='poisson', optimizer=optim)
     return model
 
+def keras_GLM_optimized(input_dim):
+    
+
+    
+    dropout = 0.4803795762081918
+    hidden_dim1 = 56
+    hidden_dim2 = 8
+    l2 = 2.2060897095713947e-08
+    learning_rate = 0.0014375751342219417
+    
+    
+    model = keras.models.Sequential()
+    # Add a dense exponential layer with hidden_dim outputs
+
+    model.add(keras.layers.Dense(int(hidden_dim1), input_shape=(input_dim,), \
+                    kernel_initializer='glorot_normal', activation='relu',
+                    activity_regularizer=keras.regularizers.l2(l2)))
+    model.add(keras.layers.Dropout(dropout))
+    
+    model.add(keras.layers.normalization.BatchNormalization())
+    
+    model.add(keras.layers.Dense(int(hidden_dim2), \
+                    kernel_initializer='glorot_normal', activation='relu'))
+    model.add(keras.layers.normalization.BatchNormalization())
+
+    # Add a dense exponential layer with 1 output
+    model.add(keras.layers.Dense(1, kernel_initializer='glorot_normal', activation='softplus', ))
+
+
+    optim = keras.optimizers.adam(lr=learning_rate)
+
+    model.compile(loss='poisson', optimizer=optim)
+    return model
+
 #---------------------------------------
-def GLM_poisson(Xr, Yr, Xt, batch_size, epochs, model = None):
+def NN_poisson(Xr, Yr, Xt, batch_size, epochs, model = None):
     
     if model is None:
-        model = keras_GLM(input_dim=Xr.shape[1], hidden_dim=0)
+        model = keras_GLM_optimized(input_dim=Xr.shape[1])
         
     model.fit(Xr, Yr, batch_size=batch_size, epochs=epochs, verbose=False)
     Yt = model.predict(Xt)
     return Yt
 
-def linear_regression(Xr,Yr,Xt):
+from pyglmnet import GLM
+def GLM_poisson(Xr, Yr, Xt):
     
-    lr = LinearRegression()
+    model = GLM(**{'distr':'softplus', 'alpha':0.1, 'tol':1e-8,
+              'reg_lambda':np.logspace(np.log(0.05), np.log(0.0001), 10, base=np.exp(1)),
+              'learning_rate':2, 'max_iter':10000, 'eta':2.0})
+        
+    model.fit(Xr, Yr)
+    Yt = model[-1].predict(Xt)
+    return Yt
+
+def linear_regression(Xr,Yr,Xt,lambd=0):
+    if lambd>0:
+        lr = Lasso(lambd)
+    else:
+        lr = LinearRegression()
     lr.fit(Xr, Yr)
     Yt = lr.predict(Xt)
     
@@ -895,10 +1027,14 @@ def fitted_keras(Xr, Yr, Xt,model=None):
     Yt = model.predict(Xt)
     return Yt
 
+import rpy2.robjects as ro
+import rpy2.robjects.numpy2ri as n2r
+n2r.activate()
+
 #---------------------------------------
 def fit_cv(X, Y, algorithm = 'XGB_poisson',
-           model=None, batch_size=32, epochs=5,
-           stratify_by_labels=[],
+           model_class=None, params = {}, batch_size=32, epochs=20,
+           stratify_by_labels=[], model = None,lambd=0,
            n_cv=10,
            verbose=1):
     if verbose > 0:
@@ -925,19 +1061,21 @@ def fit_cv(X, Y, algorithm = 'XGB_poisson',
         Yr = Y[idx_r]
         Xt = X[idx_t, :]
         Yt = Y[idx_t]
+        
 
-        if algorithm == 'XGB_poisson':
+        if algorithm == 'XGB_poisson' or algorithm == 'GLM_poisson':
             Yt_hat = eval(algorithm)(Xr, Yr, Xt)
-        elif algorithm == 'GLM_poisson':
-            Yt_hat = GLM_poisson(Xr, Yr, Xt, batch_size, epochs, model = model)
+        elif algorithm == 'NN_poisson':
+            model = model_class(**params)
+            Yt_hat = NN_poisson(Xr, Yr, Xt, batch_size, epochs, model = model)
         elif algorithm == 'linear_regression':
-            Yt_hat = eval(algorithm)(Xr, Yr, Xt)
+            Yt_hat = eval(algorithm)(Xr, Yr, Xt,lambd=lambd)
         elif algorithm == 'fitted_keras':
             Yt_hat = fitted_keras(Xr, Yr, Xt,model = model)
         else:
-            raise NotImplementedError('Model not implemented.')
+            Yt_hat = model(Xr, Yr, Xt)
 
-        Y_hat[idx_t] = Yt_hat
+        Y_hat[idx_t] = Yt_hat.flatten()
 
         pseudo_R2 = poisson_pseudo_R2(Yt, Yt_hat, np.mean(Yr))
         pseudo_R2_cv.append(pseudo_R2)
@@ -954,8 +1092,32 @@ def fit_cv(X, Y, algorithm = 'XGB_poisson',
         print 60 * '-'
     return Y_hat, pseudo_R2_cv
 
+    if verbose > 0:
+        print("pseudo_R2_cv: %0.6f (+/- %0.6f)" % (np.mean(pseudo_R2_cv),
+                                   np.std(pseudo_R2_cv) / np.sqrt(n_cv)))
+
+
+    if verbose > 0:
+        print 60 * '-'
+    return Y_hat, pseudo_R2_cv
+
 #---------------------------------------
-def fit(X, Y, algorithm = 'XGB_poisson', model=None, batch_size=32, epochs=5):
+def linear_regression(Xr,Yr,Xt,lambd=0):
+    if lambd>0:
+        lr = Lasso(lambd)
+    else:
+        lr = LinearRegression()
+    lr.fit(Xr, Yr)
+    Yt = lr.predict(Xt)
+#     print(lr.alpha_)
+    
+    #return rectified output (negative values cause Inf psuedo-R2)
+    return np.maximum(Yt,0)
+
+#---------------------------------------
+from sklearn.linear_model import LinearRegression, LassoCV, Lasso
+
+def fit(X, Y, algorithm = 'XGB_poisson', model=None, batch_size=32, epochs=5, lambd = 0):
     if algorithm=='XGB_poisson':
         param = {'objective': "count:poisson",
         'eval_metric': "logloss",
@@ -975,13 +1137,23 @@ def fit(X, Y, algorithm = 'XGB_poisson', model=None, batch_size=32, epochs=5):
         model = xgb.train(param, dtrain, num_round)
 
     elif algorithm=='GLM_poisson':
-        model = keras_GLM(input_dim=X.shape[1], hidden_dim=0)
-        model.fit(X, Y, batch_size=batch_size, epochs=epochs, verbose=False)
-        
+        def r_glmnet(Xr,Yr,Xt):
+            yr = ro.FloatVector(Yr) # use factors
+            trained_model = r['cv.glmnet'](Xr, yr, family="poisson",alpha=0.1,standardize=False,)
+                   #    **{'lambda.min.ratio': 0.0001, 'upper.limits': 1e2, 'lower.limits': -1e2})
+            lambda_min = np.asanyarray(trained_model.rx2('lambda.min'))[0]
+            Yt = r['predict'](trained_model,s=lambda_min,newx=Xt,type="response")
+            print(lambda_min)
+            return np.array(list(Yt))
+
     elif algorithm == 'linear_regression':
-        model = LinearRegression()
+#         
+        if lambd>0:
+            model = Lasso(lambd)
+        else:
+            model = LinearRegression()
         model.fit(X,Y)
-        
+#         print(model.alpha_)
     else:
         raise NotImplementedError('Model not implemented.')
 
@@ -1073,6 +1245,409 @@ def load_model(model_name, path_to_model = '.'):
     loaded_model.load_weights(h5_name)
     print("Loaded model from disk")
     return loaded_model
+
+def bootstrap3(x,y,labels):
+    mask = np.random.choice(len(x), len(x), replace = True)
+    assert mask.shape == y.shape
+    
+    return x[mask],y[mask], labels[mask]
+
+def prep_data_and_fit_neurons(df_neurons, df_data, model='XGB_poisson', session = 'art', 
+                         nat_features = None, image_feature = 'hue.histogram', name  = None,
+                         verbose = 0, plot=False, which_neurons = 'all',joint = False,
+                         simulated_responses = None, image_categories = None, category = None,
+                             lambd = 0, art_XGB = None, resample=False, fit_on_halves = False):
+    """
+    Master function to fit neural data with specified model and predict to one-hot hue vectors to build a tuning curve.
+    
+    This handles a lot of the tricky data preparation. For each neuron, it looks up which trials were valid
+    (this is different per neuron because we throw out sessions in which we're suspicious of neural drift for that neuron)
+    and then prepares the data vectors, calls a cross-validating fitting procedure to get the quality of fit,
+    then refits that model to the entire data vector, then finally uses that model to predict to the one-hot hues.
+    
+    There are options in this function for a lot of the control analysis, like supplying simulated data instead of 
+    using real neural data, as well as fitting two models fit on only half of the model.
+    
+    
+    
+    Inputs:
+    ======
+    df_neurons = dataframe with neural data
+    df_data = dataframe with all data. Must contain 'session_number' column
+    nat_features = precomputed natural features. Result of get_nat.features
+                        Required when session = 'nat'.
+    
+    Options:
+    ========
+    image_feature = {hue.histogram, hue.mean, vgg.l8, vgg.l7, vgg.l6, vgg.l5}
+                        What feature to use for the natural images. 
+                        Required when session = 'nat'.
+                        
+    model = what algorithm to feed to fit_cv 
+    session = {'art', 'nat'} Which session type to fit to
+    plot = {True, False} Whether to plot the fits
+    verbose = {0,1,2} how much to print
+    which_neurons = 'all', or list of indices of neurons to fit (in case you want just one, say)
+    joint = whether to use non-images features too
+    simulated_responses = list of neuron's responses. 
+    valid_images = boolean vector of length nat_features.index
+    resample = whether to fit to a random sample of trials, sampled with replacement
+    fit_on_halves = when fitting the final model for the tuning curve analysis, 
+    
+    Outputs:
+    ========
+    df_fits: A dataframe with a single column listing, for each neuron, a dictionary with 4 value/key pairs:
+    'hue', 'spike_counts', 'predicted_spike_counts', 'pseudo_R2'
+    
+    """
+    assert session in ['art', 'nat']
+    assert model in ['XGB_poisson', 'GLM_poisson','linear_regression','fitted_keras','art_model','art_model_mean_corrected']
+    # handle situation where we're using the mean-firing-rate corrected art. tuning curves as the model on nat. scenes
+    correct_mean = False
+    if model == 'art_model_mean_corrected':
+        correct_mean = True
+        model = 'art_model'
+        
+    if session is 'nat':
+        assert nat_features is not None
+        assert image_feature in \
+             ['hue.histogram', 'hue.mean', 'vgg.l8', 'vgg.l7', 'vgg.l6', 'vgg.l5']
+    if model is 'fitted_keras':
+        assert image_feature in ['vgg.l8', 'vgg.l7', 'vgg.l6', 'vgg.l5'] and session is 'nat'
+    if model is 'art_model':
+        assert image_feature == 'hue.histogram'
+        assert art_XGB is not None
+            
+    if which_neurons is 'all':
+        which_neurons = np.arange(len(df_neurons['name']))
+    elif isinstance(which_neurons,int):
+        which_neurons = [which_neurons]
+        
+    if image_categories is not None:
+        assert image_categories.shape == (len(nat_features),)
+        
+    if name is None:
+        name = session+'_'+model+'_'+image_feature
+    
+    df_fits = pd.DataFrame(columns=[name])
+    which_session = session + '_sessions'
+    
+    # Compute feed forward features for plain hue image
+    if session == 'nat':
+        plain_hue = np.linspace(-np.pi, np.pi, 360)
+        if image_feature in ['vgg.l8', 'vgg.l7', 'vgg.l6', 'vgg.l5']:
+            
+            # build model
+            
+            if image_feature == 'vgg.l8':
+                vgg_model= vgg_transfer_ari(n_pops=0)
+                n_nodes = 1011
+                if not joint: n_nodes = 1000
+            elif image_feature == 'vgg.l7':
+                vgg_model= vgg_transfer_ari(n_pops=1)
+                n_nodes = 4107
+                if not joint: n_nodes = 4096
+            elif image_feature == 'vgg.l6':
+                vgg_model= vgg_transfer_ari(n_pops=2)
+                n_nodes = 4107
+                if not joint: n_nodes = 4096
+            elif image_feature == 'vgg.l5':
+                vgg_model= vgg_transfer_ari(n_pops=3)
+                n_nodes = 25099
+                if not joint: n_nodes = 25088
+            
+            Xplain = list()
+            stimpath = '../V4pydata'
+            for stim_id in range(360):
+                imname = '/stimuli/M3/Hues/img%03d.jpg' % stim_id
+                filename = stimpath + imname
+                I = load_and_preprocess_ari(filename)
+                Xplain.append(np.squeeze(vgg_model.predict(I)))
+            Xplain = np.array(Xplain)
+            n_bins = Xplain.shape[1]
+        elif image_feature == 'hue.histogram':
+            # Define histograms of plain hue stimuli
+            n_bins = 16
+            Xplain = onehothue(plain_hue, n_bins=n_bins)
+        elif image_feature == 'hue.mean':
+            Xplain = plain_hue.reshape((360,1))
+    
+    ######### Get tuning curves for all neurons ###########
+
+    for neuron_id, neuron_name in tqdm(enumerate(df_neurons['name'])):
+        
+        if neuron_id not in which_neurons:
+            continue
+
+        if verbose>0:
+            print 'Running neuron ' + neuron_name
+
+
+        ### Get proper X and Y data ~~~~~~~~~~~~~~~
+
+        # Extract session numbers
+        sessions_of_interest = df_neurons.loc[neuron_id][which_session]
+
+        # Grab relevant data
+        if session is 'art':
+            
+            df_sessions_of_interest = df_data.loc[df_data['session.number'].isin(sessions_of_interest)]
+            
+            covariates =  ['predictors.hue', 
+                           'predictors.col', 
+                           'predictors.row', 
+                           'predictors.hue_prev', 
+                           'predictors.stim_dur', 
+                           'predictors.off_to_onset_times']
+
+            # Get covariates
+            X = df_sessions_of_interest[covariates].values  
+            # for plotting
+            x_data = df_sessions_of_interest['predictors.hue'].values
+
+            
+        else:  # get natural feature
+            if image_categories is not None:
+                in_category = nat_features['accepted_indices'].loc[image_categories==category]
+            else:
+                in_category = nat_features['accepted_indices']
+            
+            df_sessions_of_interest = df_data.loc[df_data['session.number'].isin(sessions_of_interest) & \
+                                             df_data.index.isin(in_category)]
+            #-----------------
+            # Get covariates
+            #-----------------
+            # Select sessions of interest
+            indices_of_interest = np.array(df_sessions_of_interest.index)
+            nat_features_of_interest = \
+                nat_features.loc[nat_features['accepted_indices'].isin(indices_of_interest)]
+
+            # Convert everything to array
+
+            n_samples = len(nat_features_of_interest)
+            
+            if n_samples < 100: 
+                if verbose>0: print('skipped: ', neuron_id)
+                #we'll add the neuron to the datafrom but without any of the features
+                #df_fits.loc[neuron_id] = 'neuron_skipped'
+                continue
+
+            # Image features
+            try: n_features = len(nat_features_of_interest['image_features']\
+                             [nat_features_of_interest.index[0]][image_feature])
+            except TypeError: # bad practice: assuming all errors will be for same reason. 
+
+                n_features = 1
+
+                    
+            image_features_array = np.zeros((n_samples, n_features))
+            image_features_list = [nat_features_of_interest['image_features'][k][image_feature] \
+                                   for k in nat_features_of_interest.index]
+            for k in range(n_samples):
+                image_features_array[k, :] = image_features_list[k]
+
+            # Non-image features
+            n_features = np.shape(nat_features_of_interest['non_image_features']\
+                                  [nat_features_of_interest.index[0]].values)[0]
+            non_image_features_array = np.zeros((n_samples, n_features))
+            non_image_features_list = [nat_features_of_interest['non_image_features'][k].values \
+                                   for k in nat_features_of_interest.index]
+            for k in range(n_samples):
+                non_image_features_array[k, :] = non_image_features_list[k]
+                
+            # for plotting
+                            # remember we're plotting as a function of HUE MEAN
+            x_data = np.array([nat_features_of_interest['image_features'][k]['hue.mean'] \
+                      for k in nat_features_of_interest.index])
+
+            # Concatenate
+            if joint:
+                X = np.concatenate((image_features_array, 
+                                   non_image_features_array), 
+                                  axis=1)
+            else:
+                X = image_features_array
+
+
+
+        # Labels and number of folds for stratified CV
+        labels = df_sessions_of_interest['im.name']  if session is 'nat' else []
+        labels = np.array(labels)
+        n_cv = 8
+
+        # Get spike counts
+        Y = df_sessions_of_interest[neuron_name].values
+        
+        # Rescale by the stimulus duration for all methods
+        if session == 'nat':
+            col = np.argwhere(nat_features['non_image_features']\
+                                      [0].keys() == 'predictors.fix_duration')[0,0]
+            Y = Y/non_image_features_array[:,col]
+            
+        
+        if simulated_responses is not None:
+            sim_spikes = simulated_responses[neuron_id]
+            assert sim_spikes.shape == Y.shape
+            Y = sim_spikes
+            
+
+        if resample is True:
+            X, Y, labels = bootstrap3(X,Y,labels)
+            
+        if fit_on_halves:
+            """Split the data in half, deterministically, making sure that trials from the same image are in the same fold."""
+            half1, half2 = list(LabelKFold(labels, n_folds=2))[0]
+            
+            X1, Y1, labels1 = X[half1],Y[half1],labels[half1]
+            X2, Y2, labels2 = X[half2],Y[half2],labels[half2]
+        
+ 
+        #### Fit models ~~~~~~~~~~~~~~~~~
+        my_model = None
+        
+        if model == 'art_model':
+            # predictions from a fit tuning curve to artificial images
+            from scipy.stats import binned_statistic
+            def art_model(Xr,Yr,Xt,neuron_id=neuron_id,nbins=n_bins):
+                assert nbins == Xr.shape[1]
+                #get average spike rate in each bin
+                hue = art_XGB.iloc[:,0][neuron_id]['hue']
+                spikes =   art_XGB.iloc[:,0][neuron_id]['spike_counts']/\
+                           art_XGB.iloc[:,0][neuron_id]['duration']
+                        
+                        
+                bin_means, bin_edges, binnumber = binned_statistic(hue,spikes,statistic='mean',bins=nbins)
+                
+                # normalize histogram by number of pixels
+                Xt_unit = Xt / np.linalg.norm(Xt)
+
+                # return lin. comb.
+                prediction =  np.dot(Xt_unit, np.reshape(bin_means,(nbins,1)))
+                if correct_mean:
+                    art_mean = np.mean(art_XGB.iloc[:,0][neuron_id]['spike_counts']/\
+                       art_XGB.iloc[:,0][neuron_id]['duration'])
+                    nat_mean = np.mean(Y)
+                    
+                    prediction += nat_mean - art_mean
+                return prediction
+            my_model = art_model
+            
+            
+        if model == 'GLM_poisson':
+            r = ro.r
+            r.library('glmnet')
+      
+            def r_glmnet(Xr,Yr,Xt):
+                yr = ro.FloatVector(Yr) # use factors
+                trained_model = r['cv.glmnet'](Xr, yr, family="poisson",alpha=0.1,standardize=False)
+
+                if lambd == 'min':
+                    lambda_min = np.asanyarray(trained_model.rx2('lambda.min'))[0]
+                else: 
+                    lambda_min = np.asanyarray(trained_model.rx2('lambda.1se'))[0]
+#                print(lambda_min)
+                Yt = r['predict'](trained_model,s=lambda_min,newx=Xt,type="response")
+                return np.array(list(Yt))
+            my_model = r_glmnet
+            model = 'myGLM'
+                
+        if model is not 'fitted_keras':   
+            # can't used fitted keras to predict for images because it was fit on those!! will be overfit
+            Yt_hat, pseudo_R2 = fit_cv(X, Y,
+                                      stratify_by_labels=labels,
+                                      n_cv=n_cv, epochs=50,batch_size=128,
+                                      algorithm= model,model = my_model,
+                                      verbose=verbose, lambd = lambd)
+            
+            
+        if model == 'myGLM':
+            model = 'GLM_poisson'
+        
+        ### Get tuning curves
+        if session is 'nat' and model is not 'art_model':
+            # Fit the  model
+            if model == 'fitted_keras':
+                model_instance = keras_GLM(n_nodes, 100)
+                if joint:
+                    model_instance.load_weights('../02-preprocessed_data/M3/fit_models/'\
+                                           +str(neuron_id)+'_'+neuron_name+'_l6_joint')
+                else:
+                    model_instance.load_weights('../02-preprocessed_data/M3/fit_models/'\
+                                           +str(neuron_id)+'_'+neuron_name+'_l6_image')
+            elif model is not 'GLM_poisson':
+                if fit_on_halves:
+                    model_instance1 = fit(X1, Y1, algorithm=model,epochs=50,batch_size=128, lambd = lambd)
+                    model_instance2 = fit(X2, Y2, algorithm=model,epochs=50,batch_size=128, lambd = lambd)
+                else:
+                    model_instance = fit(X, Y, algorithm=model,epochs=50,batch_size=128, lambd = lambd)
+            
+            ### Predict on plain hue stimuli ###
+            if joint:
+                 # use or no?
+                random_resample = np.random.randint(0, n_samples, Xplain.shape[0])
+                # set :Xplain.shape[0] below to random_resample if yes
+                Xplain_augment = np.concatenate((Xplain, 
+                                      non_image_features_array[:Xplain.shape[0], :]), axis=1)
+            else:
+                Xplain_augment = Xplain
+            
+            if fit_on_halves:
+                if model == 'XGB_poisson':
+                    Yplain_hat1 = model_instance1.predict(xgb.DMatrix(Xplain_augment))
+                    Yplain_hat2 = model_instance2.predict(xgb.DMatrix(Xplain_augment))
+                elif model is 'GLM_poisson':
+                    Yplain_hat1 = r_glmnet(X1, Y1, Xplain_augment)
+                    Yplain_hat2 = r_glmnet(X2, Y2, Xplain_augment)
+                else:
+                    Yplain_hat1 = model_instance1.predict(Xplain_augment)
+                    Yplain_hat2 = model_instance2.predict(Xplain_augment)
+                
+            else:
+                if model == 'XGB_poisson':
+                    Yplain_hat = model_instance.predict(xgb.DMatrix(Xplain_augment))
+                elif model is 'GLM_poisson':
+                    Yplain_hat = r_glmnet(X, Y, Xplain_augment)
+                else:
+                    Yplain_hat = model_instance.predict(Xplain_augment)
+
+        
+        # plot responses. for natural images, it's response to images vs. average hue of image
+        if plot:
+            y_data = Y
+            xlabel = 'hue'
+            plot_xy(x_data=x_data, y_data=y_data,
+                       y_model=Yt_hat,
+                       lowess_frac=0.5, xlabel=xlabel, model_name=model, 
+                       x_jitter_level=0., y_jitter_level=0.5, title = 'max')
+            plt.show()
+            
+            
+        temp = dict()
+        temp['hue'] = x_data
+        temp['spike_counts'] = Y
+        
+        
+        if session == 'art':
+            temp['duration'] = df_sessions_of_interest['predictors.stim_dur'].values
+            temp['time_normalized_counts'] = Y/df_sessions_of_interest['predictors.stim_dur'].values
+            
+        
+        if model is not 'fitted_keras':
+            temp['predicted_spike_counts'] = np.squeeze(Yt_hat)
+            temp['pseudo_R2'] = pseudo_R2
+                     
+        if session is 'nat' and model is not 'art_model':
+            temp['plain_hue'] = plain_hue
+            
+            if fit_on_halves:
+                temp['plain_predicted_spike_counts_half1'] = np.squeeze(Yplain_hat1)
+                temp['plain_predicted_spike_counts_half2'] = np.squeeze(Yplain_hat2)
+            else:
+                temp['plain_predicted_spike_counts'] = np.squeeze(Yplain_hat)
+        
+        df_fits.loc[neuron_id] = [temp]
+        
+    return df_fits
 
 #---------------------------------------
 # Helpers for visualization
@@ -1192,6 +1767,54 @@ def plot_model_comparison(models_for_plot, models=[], color='r', title=None):
         plt.title(title)
 
 # -----------------------------------------------------------------
+import matplotlib.collections as mcoll
+from matplotlib.collections import LineCollection
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
+def colorline(
+        x, y, z=None, cmap='hsv', norm=plt.Normalize(0.0, 1.0),
+        linewidth=3, alpha=1.0):
+    """
+    http://nbviewer.ipython.org/github/dpsanders/matplotlib-examples/blob/master/colorline.ipynb
+    http://matplotlib.org/examples/pylab_examples/multicolored_line.html
+    Plot a colored line with coordinates x and y
+    Optionally specify colors in the array z
+    Optionally specify a colormap, a norm function and a line width
+    """
+
+    # Default colors equally spaced on [0,1]:
+    if z is None:
+        z = np.linspace(0.0, 1.0, len(x))
+
+    # Special case if a single number:
+    # to check for numerical input -- this is a hack
+    if not hasattr(z, "__iter__"):
+        z = np.array([z])
+    z = np.asarray(z)
+    
+    segments = make_segments(x, y)
+    lc = LineCollection(segments, array=z, cmap=cmap, norm=norm, linewidth=linewidth, alpha=alpha)
+    
+    ax = plt.gca()
+    ax.add_collection(lc)
+    
+    return lc
+def make_segments(x, y):
+    '''
+    Create list of line segments from x and y coordinates, in the correct format for LineCollection:
+    an array of the form   numlines x (points per line) x 2 (x and y) array
+    '''
+
+    points = np.array([x, y]).T.reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    
+    return segments
+def bootstrap2(x,y):
+    mask = np.random.choice(len(x), len(x), replace = True)
+    assert mask.shape == y.shape
+    
+    return x[mask],y[mask]
+
 def plot_tuning_curve(models_for_plot, hues=[], Y=[], models=[], title='',
                       colors=['#F5A21E', '#134B64', '#EF3E34',
                               '#02A68E', '#FF07CD']):
@@ -1297,22 +1920,38 @@ def plot_psth(psth, event_name='event_onset',
         plt.legend(legend, frameon=False)
 
 
+def bootstrap(yy):
+    # sample with replacement
+    means = []
+    N = 1000
+    for i in range(N):
+        yy_samp = np.random.choice(yy,len(yy))
+        means.append(np.nanmean(yy_samp))
+    means = np.sort(means)
+    crit05 = int(0.025*N)
+    crit95 = int(0.975*N)
+    return np.abs(np.mean(yy)-means[[crit05,crit95]])
+
 def plot_xy(x_data=None, y_datas=None, 
-            lowess_frac = 0.3,
+            lowess_frac = 0.2,
             xlabel='variable',
             model_name='hue',
             x_jitter_level=0, y_jitter_level=0.5,
             semilogx=False,
-            model_alpha=0.1,
-            colors=['k','F5A21E', '#EF3E34', '#134B64',  '#02A68E', '#FF07CD'],
-            data_ms = 10, title = 'max'):
+            model_alpha=0.1,lw=4,
+            colors=['#EF3E34', '#F5A21E', '#134B64',  '#02A68E', '#FF07CD'],
+            data_ms = 10, title = None, labels = None,
+            plot_points=True):
     
-    if not isinstance(y_data,list):
-        y_data = [y_data]
+    if not isinstance(y_datas,list):
+        y_datas = [y_datas]
+    
+    if labels is None:
+        labels = ['_']*len(y_datas)
 
     # User lowess smoothing to smooth data and model
     lowess = sm.nonparametric.lowess
-    smoothed_data = [lowess(y_d, x_data, frac=lowess_frac) for y_d in y_datas]
+    smoothed_data = [lowess(np.squeeze(y_d), x_data, frac=lowess_frac) for y_d in y_datas]
 
     # Add jitter to both axes
     x_jitter = x_jitter_level * np.random.rand(np.size(x_data))
@@ -1321,9 +1960,10 @@ def plot_xy(x_data=None, y_datas=None,
     # Display
     if semilogx:
         for i,y_data in enumerate(y_datas):
-            plt.semilogx(x_data + x_jitter,
+            if plot_points:
+                plt.semilogx(x_data + x_jitter,
                          y_data + y_jitter,
-                         '.', alpha=0.1, color = colors[i],
+                         '.', alpha=model_alpha, color = colors[i],
                          ms=data_ms)
 
        
@@ -1335,16 +1975,16 @@ def plot_xy(x_data=None, y_datas=None,
 
     else:
         for i,y_data in enumerate(y_datas):
+            if plot_points:
+                plt.plot(x_data + x_jitter,
+                     y_data,
+                     '.', color=colors[i],
+                     alpha=model_alpha,label='_')
 
-            plt.plot(x_data + x_jitter,
-                     y_model,
-                     '.', color=colorsI],
-                     alpha=model_alpha)
 
-
-            plt.plot(smoothed_model[:,0],
-                     smoothed_model[:,1],
-                     color=colors[I], lw=4)
+            plt.plot(smoothed_data[i][:,0],
+                     smoothed_data[i][:,1],
+                     color=colors[i], lw=lw,label=labels[i])
 
     ax=plt.gca()
     ax.spines['top'].set_visible(False)
@@ -1357,11 +1997,14 @@ def plot_xy(x_data=None, y_datas=None,
     #           frameon=False)
     
     if title == 'max':
-        model_max = smoothed_model[np.argmax(smoothed_model[:,1]),0]
+        model_max = smoothed_data[np.argmax(smoothed_model[:,1]),0]
         data_max = smoothed_data[np.argmax(smoothed_data[:,1]),0]
         title = 'Model {0:.2f} ; Data {1:.2f}'.format(model_max,data_max)
     
-    plt.title(title)
+        plt.title(title)
+        
+    plt.legend()
+  
 
     
 ## F Chollet's function to load VGG
@@ -1380,9 +2023,9 @@ from keras.preprocessing import image
 from keras.utils import layer_utils
 from keras.utils.data_utils import get_file
 from keras import backend as K
-from keras.applications.imagenet_utils import decode_predictions
-from keras.applications.imagenet_utils import preprocess_input
-from keras.applications.imagenet_utils import _obtain_input_shape
+from keras_applications.imagenet_utils import decode_predictions
+from keras_applications.imagenet_utils import preprocess_input
+from keras_applications.imagenet_utils import _obtain_input_shape
 from keras.engine.topology import get_source_inputs
     
 def VGG16(include_top=True, weights='imagenet',
@@ -1566,6 +2209,7 @@ def load_and_preprocess_ari(img_path):
     img = image.load_img(img_path, target_size=(224, 224))
     x = image.img_to_array(img)
     x = np.expand_dims(x, axis=0)
+    # Does RGB -> BRG here
     x = preprocess_input(x)
     return x
 
@@ -1631,109 +2275,99 @@ def RDM_corr(datas, hues = False, method = 'correlation'):
     return ks
 
 
-def prep_data_and_fit_neurons(df_neurons, df_data, model='XGB_poisson', session = 'art', 
-                         nat_features = None, image_feature = 'hue.histogram', 
-                         verbose = 0, plot=False, which_neurons = 'all'):
+def get_VGG_color_tuning(df_neurons, df_data, features_location, image_feature, model = 'fitted_keras',
+                        which_neurons = 'all', joint = True,
+                        compare_to_response = False, nbins = 16, verbose = 0):
     """
-    Fits neural data with specified model
+    Builds a tuning curve from responses to images with greyed-out colors.
     
-    Returns a dataframe with a single column
-    listing for each neuron a dictionary with 4 value/key pairs:
-    'hue', 'spike_counts', 'predicted_spike_counts', 'pseudo_R2'
     
-    Inputs:
+    Inputs
+    ======
     df_neurons = dataframe with neural data
     df_data = dataframe with all data. Must contain 'session_number' column
+    features_location = path to results of `get_nat_features_ari_hue_dropout`. 
+                        assumes name "'precomputed_nat_features_hue_dropout_' + str(_)"
+    image_feature = which layer of the VGG to use
+    model = which model to train. Either 'fitted_keras' or an sklearn-style model object
+    which_neurons = a list of ints of which neurons to use
+    joint = To use just image features or other things too (fixation statistics, ...)
+    compare_to_response = whether to subtract the responses from the actual neural response rather than the
+                    predicted response. 
+                    WARNING perhaps unjustified, needs evaluation
+    nbins = number of color bins used to construct different images. 
+            same as used when `get_nat_features_ari_hue_dropout` was called
+        
     
-    Options:
-    nat_features = precomputed natural features. Result of get_nat.features
-                        Required when session = 'nat'.
-    image_feature = {hue.histogram, hue.mean, vgg.l8, vgg.l7, vgg.l6, vgg.l5}
-                        What feature to use for the natural images. 
-                        Required when session = 'nat'.
-                        
-    model = what algorithm to feed to fit_cv 
-    session = {'art', 'nat'} Which session type to fit to
-    plot = {True, False} Whether to plot the fits
-    verbose = {0,1,2} how much to print
-    which_neurons = 'all', or list of indices of neurons to fit (in case you want just one, say)
-    
-    
+    Outputs
+    =======
+    tuning_curve
     """
-    assert session in ['art', 'nat']
-    assert model in ['XGB_poisson', 'GLM_poisson','linear_regression']
-    if session is 'nat':
-        assert nat_features is not None
-        assert image_feature in \
-             ['hue.histogram', 'hue.mean', 'vgg.l8', 'vgg.l7', 'vgg.l6', 'vgg.l5']
-            
+    assert image_feature in ['vgg.l8', 'vgg.l7', 'vgg.l6', 'vgg.l5']
+    if not compare_to_response and model == 'fitted_keras':
+        print('WARNING `fitted_keras` model was trained on images it is predicting for.')
+    
     if which_neurons is 'all':
         which_neurons = np.arange(len(df_neurons['name']))
     elif isinstance(which_neurons,int):
         which_neurons = [which_neurons]
-        
     
-    df_fits = pd.DataFrame(columns=[session+'_'+model])
-    which_session = session + '_sessions'
+    # build model        
+    if image_feature == 'vgg.l8':
+        vgg_model= vgg_transfer_ari(n_pops=0)
+        n_nodes = 1011
+        if not joint: n_nodes = 1000
+    elif image_feature == 'vgg.l7':
+        vgg_model= vgg_transfer_ari(n_pops=1)
+        n_nodes = 4107
+        if not joint: n_nodes = 4096
+    elif image_feature == 'vgg.l6':
+        vgg_model= vgg_transfer_ari(n_pops=2)
+        n_nodes = 4107
+        if not joint: n_nodes = 4096
+    elif image_feature == 'vgg.l5':
+        vgg_model= vgg_transfer_ari(n_pops=3)
+        n_nodes = 25099
+        if not joint: n_nodes = 25088
+            
+    n_neurons = len(df_neurons['name'])
+    assert n_neurons == 90
+    hue_responses = np.zeros((n_neurons,nbins))
     
-    # Compute feed forward features for plain hue image
-    if session == 'art':
-        if image_feature in ['vgg.l8', 'vgg.l7', 'vgg.l6', 'vgg.l5']:
-            Xplain = list()
-            stimpath = '../V4pydata'
-            for stim_id in range(360):
-                imname = '/stimuli/M3/Hues/img%03d.jpg' % stim_id
-                filename = stimpath + imname
-                I = cv2.imread(filename)
-                I_for_vgg = prepare_image_for_vgg(I)
-                Xplain.append(np.squeeze(vgg_model_l7.predict(I_for_vgg)))
-            Xplain = np.array(Xplain)
-            n_bins = Xplain.shape[1]
+    #things to save when we look at unmodified images
+    model_instances = [0]*n_neurons
+    mean_responses_to_full_images = np.zeros((n_neurons,))
+    
+    for hue in range(nbins+1):
+        if hue==0:
+            this_image_feature = image_feature + '.full'
         else:
-            # Define histograms of plain hue stimuli
-            n_bins = 16
-            plain_hue = np.linspace(-np.pi, np.pi, 360)
-            Xplain = V4.onehothue(plain_hue, n_bins=n_bins)
-        
-    
-    ######### Get tuning curves for all neurons ###########
+            this_image_feature = image_feature + '.lacking' + str(hue)
 
-    for neuron_id, neuron_name in tqdm(enumerate(df_neurons['name'])):
-        
-        if neuron_id not in which_neurons:
-            continue
-
+        file_to_load = features_location + str(hue)
         if verbose>0:
-            print 'Running neuron ' + neuron_name
-
-
-        ### Get proper X and Y data ~~~~~~~~~~~~~~~
-
-        # Extract session numbers
-        sessions_of_interest = df_neurons.loc[neuron_id][which_session]
-
-        # Grab relevant data
-        if session is 'art':
-            df_sessions_of_interest = df_data.loc[df_data['session.number'].isin(sessions_of_interest)]
+            print('... loading '+file_to_load)
+        nat_features = pd.read_pickle(file_to_load)
             
-            covariates =  ['predictors.hue', 
-                           'predictors.col', 
-                           'predictors.row', 
-                           'predictors.hue_prev', 
-                           'predictors.stim_dur', 
-                           'predictors.off_to_onset_times']
+        for neuron_id, neuron_name in tqdm(enumerate(df_neurons['name'])):
 
-            # Get covariates
-            X = df_sessions_of_interest[covariates].values  
-            
-        else:  # get natural feature
+            if neuron_id not in which_neurons:
+                continue
+
+
+            ### Get X and Y data for responses to full images
+
+            # Extract session numbers
+            sessions_of_interest = df_neurons.loc[neuron_id]['nat_sessions']
+
             df_sessions_of_interest = df_data.loc[df_data['session.number'].isin(sessions_of_interest) & \
-                                             df_data.index.isin(nat_features['accepted_indices'])]
+                                                 df_data.index.isin(nat_features['accepted_indices'])]
             #-----------------
             # Get covariates
             #-----------------
-            # Select a df of interest
+            # Select sessions of interest
             indices_of_interest = np.array(df_sessions_of_interest.index)
+
             nat_features_of_interest = \
                 nat_features.loc[nat_features['accepted_indices'].isin(indices_of_interest)]
 
@@ -1743,10 +2377,13 @@ def prep_data_and_fit_neurons(df_neurons, df_data, model='XGB_poisson', session 
 
             # Image features
             n_features = len(nat_features_of_interest['image_features']\
-                             [nat_features_of_interest.index[0]][image_feature])
+                             [nat_features_of_interest.index[0]][this_image_feature])
+
             image_features_array = np.zeros((n_samples, n_features))
-            image_features_list = [nat_features_of_interest['image_features'][k][image_feature] \
+            image_features_list = [nat_features_of_interest['image_features'][k][this_image_feature] \
                                    for k in nat_features_of_interest.index]
+            assert len(image_features_list) == n_samples
+
             for k in range(n_samples):
                 image_features_array[k, :] = image_features_list[k]
 
@@ -1755,70 +2392,216 @@ def prep_data_and_fit_neurons(df_neurons, df_data, model='XGB_poisson', session 
                                   [nat_features_of_interest.index[0]].values)[0]
             non_image_features_array = np.zeros((n_samples, n_features))
             non_image_features_list = [nat_features_of_interest['non_image_features'][k].values \
-                                   for k in nat_features_of_interest.index]
+                                   for k in nat_features_of_interest.index\
+                                  if this_image_feature in nat_features_of_interest['image_features'][k].keys()]
             for k in range(n_samples):
                 non_image_features_array[k, :] = non_image_features_list[k]
 
             # Concatenate
-            X = np.concatenate((image_features_array, 
+            if joint:
+                X = np.concatenate((image_features_array, 
                                    non_image_features_array), 
                                   axis=1)
+            else:
+                X = image_features_array
 
 
 
-        # Labels and number of folds for stratified CV
-        labels = df_sessions_of_interest['session.number']
-        n_cv = np.size(np.unique(sessions_of_interest))
-        labels = [] if n_cv == 1 else labels
-        n_cv = 10 if n_cv == 1 else n_cv
-
-        # Get spike counts
-        Y = df_sessions_of_interest[neuron_name].values
-      
-        
-        #### Fit models ~~~~~~~~~~~~~~~~~
-        
-        Yt_hat, pseudo_R2 = fit_cv(X, Y,
-                                      stratify_by_labels=labels,
-                                      n_cv=n_cv,
-                                      algorithm= model,
-                                      verbose=verbose)
-        ### Get tuning curves
-        if session is 'nat':
-            # Fit the  model
-            model = fit(X, Y, algorithm=model)
+            # Labels and number of folds for stratified CV
+            labels = df_sessions_of_interest['session.number']
+            n_cv = np.size(np.unique(sessions_of_interest))
+            labels = [] if n_cv == 1 else labels
+            n_cv = 10 if n_cv == 1 else n_cv
             
-            # Predict on plain hue stimuli
-            Xplain_augment = np.concatenate((Xplain, 
-                                     X[np.random.randint(0, X.shape[0], Xplain.shape[0]), n_bins:]), 
-                                    axis=1)
+            # first, the original images
+            if hue == 0:
+                # Get spike counts
+                Y = df_sessions_of_interest[neuron_name].values
+
+                #### Fit model and predict
+
+                if model is not 'fitted_keras':   
+                    # can't used fitted keras to predict for images because it was fit on those!! will be overfit
+                    Yt_hat, pseudo_R2 = fit_cv(X, Y,
+                                              stratify_by_labels=labels,
+                                              n_cv=n_cv, epochs=50,batch_size=128,
+                                              algorithm= model,model = my_model,
+                                              verbose=verbose)
+
+                    model_instance = fit(X, Y, algorithm=model,epochs=50,batch_size=128,)
+
+                else:
+                    model_instance = keras_GLM(n_nodes, 100)
+                    if joint:
+                        model_instance.load_weights('../02-preprocessed_data/M3/fit_models/'\
+                                               +str(neuron_id)+'_'+neuron_name+'_l6_joint')
+                    else:
+                        model_instance.load_weights('../02-preprocessed_data/M3/fit_models/'\
+                                               +str(neuron_id)+'_'+neuron_name+'_l6_image')
+
+                    if not compare_to_response:
+                        Yt_hat = model_instance.predict(X)
+                
+                if compare_to_response:
+                    responses_to_full_images = Y
+                else:
+                    responses_to_full_images = Yt_hat
+
+                #save for when we predict responses for other images
+                model_instances[neuron_id] = model_instance
+                mean_responses_to_full_images[neuron_id] = np.nanmean(responses_to_full_images)
+        
+            ### Now predict the responses to each of the minus-1-hue image sets
+            # We'll record the mean difference of this response
+            else:
+              
+                # get responses to minus-1-hue images
+                responses_to_minus_1 = model_instances[neuron_id].predict(X)
+
+                #difference of means
+                hue_responses[neuron_id, hue-1] = mean_responses_to_full_images[neuron_id]\
+                                                    - np.nanmean(responses_to_minus_1)
             
-            Yplain_hat = model.predict(xgb.DMatrix(Xplain_augment))
+    return hue_responses
+def bootstrap_along_axis1(yy):
+    
+#     print(yy.shape)
+    # sample with replacement
+    means = []
+    N = 1000
+    for i in range(N):
+        mask = np.random.choice(range(yy.shape[1]), yy.shape[1])
+        means.append(np.mean(yy[:,mask],axis=1))
+#     print(np.array(means).shape)
+    means = np.sort(np.array(means), axis=0)
+    crit05 = means[50]
+    crit95 = means[950]
+    return crit05,crit95
+
+def bootstrap_nan(yy):
+    # sample with replacement
+    means = []
+    N = 1000
+    for i in range(N):
+        yy_samp = np.random.choice(yy,len(yy))
+        means.append(np.nanmean(yy_samp))
+    means = np.sort(means)
+    crit05 = int(0.025*N)
+    crit95 = int(0.975*N)
+    return means[[crit05,crit95]]
+
+def bootstrap_along_axis0(yy):
+    
+#     print(yy.shape)
+    # sample with replacement
+    means = []
+    N = 1000
+    for i in range(N):
+        mask = np.random.choice(range(yy.shape[0]), yy.shape[0])
+        means.append(np.mean(yy[mask],axis=0))
+#     print(np.array(means).shape)
+    means = np.sort(np.array(means), axis=0)
+    crit05 = means[50]
+    crit95 = means[950]
+    return crit05,crit95
+
+def return_number_in_bin(vector, bins = 20, lim = (-1,1)):
+    bin_edges = np.arange(lim[0],lim[1], -(lim[0]-lim[1])/float(bins))
+#     print(bin_edges)
+    bin_counts = np.zeros(bin_edges.shape)
+    number_in_bin = np.zeros(vector.shape)
+    for i,value in enumerate(vector):
+        # get bin index
+        index = np.argwhere(value>bin_edges)[-1]
+#         print(value,index)
         
+        #place in bin
+        bin_counts[index] += 1
+        number_in_bin[i] = bin_counts[index]
+    return number_in_bin
+def CI_along_axis0_nan(yy, percentile=5):
+    """This returns the 5 and 95% CI for a matrix, over the first index. Not the mean - the CI on the value.
+    Percentile can be any integer in [1,50)
+    """
+    # each row is a new run; each column a neuron. So we want to sort over runs
+   
+    means = np.sort(yy, axis=0)
         
+    crit05 = []
+    crit95 = []
+    for column in means.T:
+        ok_values = column[~np.isnan(column)]
+        percentile_index = int(len(ok_values)*percentile/100.)
+        crit05.append(ok_values[percentile_index])
+        crit95.append(ok_values[len(ok_values)-percentile_index])
+
+    return np.array(crit05),np.array(crit95)
+
+def get_slopes(neuron_id, diff_dataframe, nbins = 8,
+              sats = [0,.1, 0.2, 0.3, 0.4, .5, .6,0.7, 0.75, 0.8, 0.85, 0.9,0.95, 1],
+              ids = 'all', plot = False):
+    """runs linear regression on the desaturation plot.
+    regresses over all images for good error propagation.
+    
+    If ids is not None, it is a list of indexes over which to get the slopes."""
+    
+    slopes = []
+    errs = []
+    rsqs  =[]
+    if plot:
+#         plt.figure(figsize = (6,4))
+        colors = []
+
+    for hue in range(1,nbins+1):
+        diffs = []
+        stds=[]
+        allpoints = []
+        allsats = []
+       
+        for sat in sats[:-1]:
+            if sat==0:
+                a = diff_dataframe.loc[neuron_id,'vgg.l6.lacking' + str(hue)]
+                
+            else:
+                a =diff_dataframe.loc[neuron_id,'vgg.l6.sat_'+str(sat)+'_bin_' + str(hue)]
+            if not (ids is 'all'):
+                a = a[ids]
+            a = a[a**2<100]  
+            diffs.append(a.mean())
+            stds.append(a.std())
+            allpoints.append(a)
+            allsats.append(sat*np.ones(a.shape))   
+            
+        allpoints = np.hstack(allpoints)
+        allsats = 100*(1-np.hstack(allsats))
+        # get slope
+        res = sm.OLS(allpoints, allsats).fit()
+        slope = res.params[0]
+        err = res.conf_int()[0]
+        
+        diffs.append(0)
+        stds.append(0)
+        
+        rsqs.append(res.rsquared)
+        slopes.append(slope)
+        errs.append(err)
         if plot:
-            x_data = df_sessions_of_interest['predictors.hue'].values
-            y_data = Y
-            xlabel = 'hue'
-            plot_xy(x_data=x_data, y_data=y_data,
-                       y_model=Yt_hat,
-                       lowess_frac=0.5, xlabel=xlabel, model_name=model, 
-                       x_jitter_level=0., y_jitter_level=0.5)
-            plt.title((X[np.argmax(Yt_hat)]*180/np.pi)[0])
-            #plt.ylim([0,4])
-            plt.show()
-            
-            
-        temp = dict()
-        temp['hue'] = df_sessions_of_interest['predictors.hue'].values
-        temp['spike_counts'] = Y
-        temp['predicted_spike_counts'] = Yt_hat   
-        temp['pseudo_R2'] = pseudo_R2
-                     
-        if session is 'nat':
-            temp['plain_hue'] = plain_hue
-            temp['plain_predicted_spike_counts'] = Yplain_hat
+            n = len(a)
+            sats_, diffs, stds = (1-np.array(sats))*100,np.array(diffs), np.array(stds)/np.sqrt(n)
+
+            h = (hue)/8.
+            c =np.roll(sns.color_palette(palette = 'hls', n_colors=8, desat=1),4)[hue-1]
+
+            plt.plot(sats_, diffs,'-o', c=c)
+            plt.fill_between(sats_, diffs-stds, diffs+stds,alpha = 0.4, color = c)
+            colors.append(c)
         
-        df_fits.loc[neuron_id] = [temp]
-        
-    return df_fits
+    if plot:
+        simpleaxis(plt.gca())
+        plt.xlabel('Percent Desaturated', fontsize = 16)    
+        plt.ylabel('Average difference of predictions', fontsize = 16)
+        plt.tight_layout()
+
+    #     plt.savefig('final_figures/saturation_dependence_{}.pdf'.format(neuron_id))
+#         plt.show()
+    return np.array(slopes), np.array(errs), np.array(rsqs)
